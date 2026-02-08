@@ -43,8 +43,7 @@ See `CHANGELOG.md` for details.
 
 ## License
 
-Choose a license that matches your intended usage (MIT / Apache-2.0 / GPL, etc.).  
-If you want contributions while keeping flexibility for reuse, **MIT** or **Apache-2.0** are common choices.
+Apache-2.0
 
 ---
 
