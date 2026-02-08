@@ -1,5 +1,6 @@
 # EVALUATORR
-Evaluation for french essays in Collège, 12-15yo^^
+Evaluation for french essays in Collège, 12-15yo
+Live demo: https://thvermot-wq.github.io/EVALUATORR/
 
 ---
 
