@@ -1,0 +1,1653 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Evaluator v2 — Sévère — Correcteur autonome (5e→3e)</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --card:#121a24; --muted:#8ea2b8; --text:#e7eef7;
+      --line:#1e2a3a; --accent:#6aa9ff; --ok:#2ecc71; --bad:#ff5c5c; --warn:#ffcc66;
+      --chip:#0f1622;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(1200px 700px at 15% -10%, #13284b 0%, transparent 55%),
+                  radial-gradient(900px 600px at 100% 0%, #1b1e36 0%, transparent 50%),
+                  var(--bg);
+      color:var(--text);
+    }
+    header{
+      max-width:1200px; margin:0 auto; padding:18px 16px 10px;
+      display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    }
+    h1{margin:0; font-size:18px; letter-spacing:.2px}
+    header .sub{margin:6px 0 0; color:var(--muted); font-size:13px; line-height:1.35}
+    main{max-width:1200px; margin:0 auto; padding:12px 16px 34px}
+    .grid{display:grid; grid-template-columns: 1.35fr .65fr; gap:12px}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border:1px solid var(--line);
+      border-radius:16px;
+      padding:14px;
+      box-shadow: 0 10px 26px rgba(0,0,0,.25);
+    }
+    .card h2{margin:0 0 10px; font-size:14px}
+    textarea{
+      width:100%; min-height:340px; resize:vertical;
+      background:#0f1622; color:var(--text);
+      border:1px solid var(--line); border-radius:12px; padding:12px;
+      font-size:14px; line-height:1.45;
+      outline:none;
+    }
+    textarea:focus{border-color: rgba(106,169,255,.55); box-shadow: 0 0 0 3px rgba(106,169,255,.12)}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+    .btn{
+      cursor:pointer; border:1px solid var(--line); background: rgba(106,169,255,.10);
+      color:var(--text); padding:10px 12px; border-radius:12px; font-weight:800;
+    }
+    .btn:hover{border-color: rgba(106,169,255,.55)}
+    .btn.secondary{background: transparent}
+    .btn.danger{background: rgba(255,92,92,.12)}
+    .btn:disabled{opacity:.55; cursor:not-allowed}
+    .pill{
+      display:inline-flex; gap:6px; align-items:center;
+      padding:6px 10px; border-radius:999px; border:1px solid var(--line); background:var(--chip);
+      color:var(--muted); font-size:12px;
+    }
+    .err{
+      display:none;
+      margin:10px 0 0; padding:10px 12px;
+      border:1px solid rgba(255,92,92,.45);
+      background: rgba(255,92,92,.10);
+      border-radius:12px;
+      color: #ffd4d4;
+    }
+    .kpi{display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px;}
+    .box{
+      border:1px solid var(--line); background: rgba(15,22,34,.6);
+      border-radius:12px; padding:10px;
+    }
+    .lab{color:var(--muted); font-size:12px}
+    .val{font-size:18px; font-weight:950; margin-top:4px}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+    .bar{height:10px; background:#0f1622; border:1px solid var(--line); border-radius:999px; overflow:hidden;}
+    .bar > div{height:100%; width:0%; background: rgba(106,169,255,.75)}
+    .small{color:var(--muted); font-size:12px; line-height:1.4}
+    details{border:1px solid var(--line); border-radius:12px; padding:10px; background: rgba(15,22,34,.55)}
+    summary{cursor:pointer; font-weight:900}
+    .list{margin:8px 0 0; padding-left:18px}
+    .list li{margin:6px 0}
+    .tag{
+      display:inline-block; margin:4px 6px 0 0;
+      padding:4px 8px; border-radius:999px; border:1px solid var(--line);
+      background: rgba(15,22,34,.75); color:var(--muted); font-size:12px;
+    }
+    .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+    .out{
+      white-space:pre-wrap; background: rgba(15,22,34,.7);
+      border:1px solid var(--line); border-radius:12px; padding:12px;
+      font-size:13px; line-height:1.45;
+    }
+    .hr{height:1px; background: var(--line); margin:10px 0}
+    .ctrl{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; justify-content:space-between}
+    label{font-size:12px; color:var(--muted)}
+    select, input[type="number"], input[type="text"]{
+      padding:8px 10px; border-radius:10px;
+      border:1px solid var(--line); background:#0f1622; color:var(--text);
+      outline:none;
+    }
+    select{min-width:140px}
+    input[type="number"]{width:110px}
+    input[type="text"]{width:220px}
+    .twoCol{display:grid; grid-template-columns: 1fr 1fr; gap:10px}
+    @media (max-width: 980px){ .twoCol{grid-template-columns:1fr} }
+    .mini{font-size:11px; color:var(--muted)}
+
+/* ===== Accueil Evaluator ===== */
+.home-hero{ padding: 18px 16px; }
+.hero{
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(106,169,255,.10), rgba(255,255,255,.02));
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 10px 26px rgba(0,0,0,.25);
+}
+.hero h2{ margin: 0 0 8px; font-size: 18px; letter-spacing: .2px; }
+.hero p{ margin: 0 0 10px; color: var(--muted); line-height: 1.4; }
+.hero .cta{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top: 10px; }
+.steps{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; margin-top: 12px; }
+@media (max-width: 980px){ .steps{ grid-template-columns:1fr; } }
+.step{
+  border: 1px solid var(--line);
+  background: rgba(15,22,34,.55);
+  border-radius: 14px;
+  padding: 12px;
+}
+.step .n{
+  display:inline-flex; align-items:center; justify-content:center;
+  width: 24px; height: 24px; border-radius: 999px;
+  border:1px solid var(--line); background: rgba(106,169,255,.12);
+  font-weight: 900; margin-right: 8px;
+}
+.step h3{ margin: 0 0 6px; font-size: 13px; }
+.step p{ margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+
+.nav-mini{
+  max-width:1200px; margin:0 auto;
+  padding:16px 16px 0;
+  display:flex; justify-content: space-between; align-items:center;
+  gap:10px; flex-wrap:wrap;
+}
+.nav-mini .brand{ display:flex; gap:8px; align-items:center; }
+.badge{
+  display:inline-flex; gap:6px; align-items:center;
+  padding: 6px 10px; border-radius: 999px;
+  border:1px solid var(--line);
+  background: rgba(15,22,34,.75);
+  color: var(--muted); font-size: 12px;
+}
+
+  </style>
+</head>
+
+<body>
+<header class="nav-mini">
+  <div class="brand">
+    <span class="badge">Evaluator</span>
+    <span class="badge">v2</span>
+    <span class="badge">stand-alone</span>
+  </div>
+  <div class="row">
+    <button class="btn secondary" id="goHome" type="button">Accueil</button>
+    <button class="btn" id="goApp" type="button">Ouvrir l’outil</button>
+  </div>
+</header>
+
+<main id="homeView" class="home-hero" style="max-width:1200px;margin:0 auto;">
+  <div class="hero">
+    <h2>Corriger vite, corriger juste, rester exigeant.</h2>
+    <p>
+      Evaluator analyse la forme (ponctuation, segmentation, syntaxe, lexique, proxys d’orthographe),
+      puis la tenue narrative (cohérence, repères, point de vue, sensoriel), et génère un commentaire.
+    </p>
+
+    <div class="cta">
+      <button class="btn" id="startBtn" type="button">Commencer une évaluation</button>
+      <button class="btn secondary" id="quickPasteBtn" type="button">Coller un texte d’exemple</button>
+      <span class="pill">Astuce : 2–3 paragraphes + repères + sensoriel non-visuel.</span>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <h3><span class="n">1</span>Coller la rédaction</h3>
+        <p>30 lignes environ, niveau 5e à 3e. Évite le “mur de texte”.</p>
+      </div>
+      <div class="step">
+        <h3><span class="n">2</span>Choisir le niveau</h3>
+        <p>Les seuils changent (mots, paragraphes, sens non-visuels, ponctuation minimale).</p>
+      </div>
+      <div class="step">
+        <h3><span class="n">3</span>Lancer l’évaluation</h3>
+        <p>Note /20, passes /10, alertes, commentaire (prof ou élève).</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<main id="appView" hidden>
+
+<header>
+  <div>
+    <h1>Evaluator v2 (sévérité haute) — Narratif 5e→3e — 2 passes + note /20</h1>
+    <p class="sub">
+      v2 = mesures plus fines + exigences minimales + commentaire “prof” et “élève” + exports CSV/JSON + historique local.
+      <span class="warn">Hard gates</span> : absence de .!? → note ≤ 9,5 ; texte trop court ; paragraphe unique ; sens non-visuels absents ; repères temps/lieu.
+    </p>
+  </div>
+  <div class="row">
+    <span class="pill">1 fichier HTML • hors-ligne</span>
+    <span class="pill">v2 sévère</span>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <section class="card">
+      <h2>Copie à évaluer</h2>
+      <textarea id="text" placeholder="Colle ici la rédaction (≈30 lignes)."></textarea>
+
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="btnEval">Évaluer</button>
+        <button class="btn secondary" id="btnExample">Exemple</button>
+        <button class="btn danger" id="btnClear">Effacer</button>
+        <span class="pill" id="status">Prêt.</span>
+      </div>
+
+      <div class="err" id="errBox"></div>
+
+      <div class="hr"></div>
+
+      <div class="ctrl">
+        <div class="row">
+          <div>
+            <label for="student">Élève (optionnel)</label><br/>
+            <input id="student" type="text" placeholder="Nom / pseudo" />
+          </div>
+          <div>
+            <label for="level">Niveau</label><br/>
+            <select id="level">
+              <option value="5e">5e</option>
+              <option value="4e" selected>4e</option>
+              <option value="3e">3e</option>
+            </select>
+          </div>
+          <div>
+            <label for="longThr">Phrase longue ≥ (mots)</label><br/>
+            <input id="longThr" type="number" min="18" max="45" value="26" />
+          </div>
+          <div>
+            <label for="longVeryThr">Très longue ≥ (mots)</label><br/>
+            <input id="longVeryThr" type="number" min="22" max="65" value="34" />
+          </div>
+          <div>
+            <label for="modeComment">Commentaire</label><br/>
+            <select id="modeComment">
+              <option value="prof" selected>Prof (détaillé)</option>
+              <option value="eleve">Élève (simple)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="w1">Poids Passe 1</label><br/>
+            <select id="w1">
+              <option value="0.60">60%</option>
+              <option value="0.55" selected>55%</option>
+              <option value="0.50">50%</option>
+              <option value="0.70">70%</option>
+            </select>
+          </div>
+          <div>
+            <label for="w2">Poids Passe 2</label><br/>
+            <select id="w2">
+              <option value="0.40">40%</option>
+              <option value="0.45" selected>45%</option>
+              <option value="0.50">50%</option>
+              <option value="0.30">30%</option>
+            </select>
+          </div>
+          <span class="pill">v2 : seuils auto par niveau (modifiables dans le code)</span>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="kpi">
+        <div class="box">
+          <div class="lab">Note finale</div>
+          <div class="val" id="finalScore">—</div>
+          <div class="bar"><div id="finalBar"></div></div>
+          <div class="small" id="finalVerdict">—</div>
+        </div>
+        <div class="box">
+          <div class="lab">Scores des passes</div>
+          <div class="val mono" id="passScores">—</div>
+          <div class="small" id="passHint">Passe 1 /10 + Passe 2 /10 → pondération → /20</div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <h2>Commentaire généré</h2>
+      <div class="out" id="comment">—</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn secondary" id="btnCopy">Copier</button>
+        <button class="btn secondary" id="btnExportTxt">Exporter TXT</button>
+        <button class="btn secondary" id="btnExportJson">Exporter JSON</button>
+        <button class="btn secondary" id="btnExportCsv">Exporter CSV</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <h2>Historique local</h2>
+      <div class="row">
+        <button class="btn secondary" id="btnSave">Sauver entrée</button>
+        <button class="btn secondary" id="btnClearHistory">Vider historique</button>
+        <span class="pill" id="histInfo">—</span>
+      </div>
+      <div class="out" id="historyBox" style="margin-top:10px">—</div>
+    </section>
+
+    <aside class="card">
+      <h2>Tableau de bord</h2>
+
+      <div class="twoCol">
+        <div class="box">
+          <div class="lab">Mots</div>
+          <div class="val" id="kWords">—</div>
+          <div class="small" id="kWordsHint">—</div>
+        </div>
+        <div class="box">
+          <div class="lab">Phrases / Paragraphes</div>
+          <div class="val" id="kSP">—</div>
+          <div class="small" id="kSegHint">—</div>
+        </div>
+        <div class="box">
+          <div class="lab">Longueur phrase (moy ± écart-type)</div>
+          <div class="val" id="kLen">—</div>
+          <div class="small" id="kLenHint">—</div>
+        </div>
+        <div class="box">
+          <div class="lab">Ponctuation (.!?… ,)</div>
+          <div class="val" id="kPunct">—</div>
+          <div class="small" id="kPunctHint">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Audit (détails des points)</summary>
+          <ul class="list" id="auditList"></ul>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details>
+          <summary>Alertes</summary>
+          <div id="alerts"></div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details>
+          <summary>Indicateurs de contenu (Passe 2)</summary>
+          <div class="out" id="contentProbe">—</div>
+        </details>
+      </div>
+
+      <p class="small" style="margin-top:10px">
+        Remarque : la Passe 2 repose sur des indices mesurables (proxys). L’outil est fait pour standardiser, durcir et accélérer — pas pour remplacer ton jugement.
+      </p>
+    </aside>
+  </div>
+</main>
+
+<script>
+/* ========= Robustesse : capture erreurs ========= */
+(function(){
+  const errBox = document.getElementById("errBox");
+  function showErr(msg){
+    errBox.style.display = "block";
+    errBox.textContent = msg;
+  }
+  window.addEventListener("error", (e)=>showErr("Erreur JS : " + (e?.message || e)));
+  window.addEventListener("unhandledrejection", (e)=>showErr("Promesse rejetée : " + (e?.reason?.message || e?.reason || e)));
+})();
+
+/* ========= Utilitaires ========= */
+function normalizeText(s){
+  return (s || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[’]/g, "'")
+    .replace(/[«»]/g, '"')
+    .replace(/…/g, "…")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+function splitParagraphs(s){
+  const parts = s.split(/\n\s*\n+/).map(p=>p.trim()).filter(Boolean);
+  return parts.length ? parts : (s.trim() ? [s.trim()] : []);
+}
+function splitSentences(s){
+  const flat = s.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+  if(!flat) return [];
+  const t = flat.replace(/\.\.\./g, "…");
+  const raw = t.split(/(?<=[.!?…])\s+/); // si pas de ponctuation -> 1 “phrase”
+  return raw.map(x=>x.trim()).filter(Boolean);
+}
+function tokenize(s){
+  const m = (s.toLowerCase().match(/[a-zà-öø-ÿ]+(?:'[a-zà-öø-ÿ]+)?/g) || []);
+  const out = [];
+  for(const tok of m){
+    if(tok.includes("'")){
+      const [l,r] = tok.split("'",2);
+      if(["l","d","j","t","m","s","c","n","qu"].includes(l) && r) out.push(r);
+      else out.push(tok);
+    } else out.push(tok);
+  }
+  return out;
+}
+function countPunctuation(s){
+  const p = {};
+  const keys = [".",",",";",":","!","?","-","\"","…"];
+  for(const k of keys){
+    const re = new RegExp("\\"+k,"g");
+    p[k] = (s.match(re) || []).length;
+  }
+  // "..." aussi
+  p["…"] += (s.match(/\.\.\./g)||[]).length;
+  return p;
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
+}
+function roundToHalf(x){ return Math.round(x*2)/2; }
+function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+function clamp01(x){ return clamp(x, 0, 1); }
+function mean(arr){ return arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : 0; }
+function stdev(arr){
+  if(arr.length<2) return 0;
+  const m = mean(arr);
+  const v = arr.reduce((a,x)=>a+(x-m)*(x-m),0)/(arr.length-1);
+  return Math.sqrt(v);
+}
+function topN(counterObj,n){
+  return Object.entries(counterObj).sort((a,b)=>b[1]-a[1]).slice(0,n);
+}
+function countOccurrences(textLower, phrase){
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("\\b" + escaped + "\\b", "g");
+  return (textLower.match(re) || []).length;
+}
+function computeMATTR(filteredTokens, windowSize=50){
+  if(filteredTokens.length===0) return 0;
+  if(filteredTokens.length<=windowSize) return (new Set(filteredTokens).size/filteredTokens.length);
+  let sum=0,count=0;
+  for(let i=0;i<=filteredTokens.length-windowSize;i++){
+    const win=filteredTokens.slice(i,i+windowSize);
+    sum += (new Set(win).size / windowSize);
+    count++;
+  }
+  return count ? (sum/count) : 0;
+}
+function nearRepeats(tokens, window=10, minLen=4, stopSet){
+  const counts = {};
+  for(let i=0;i<tokens.length;i++){
+    const w=tokens[i];
+    if(w.length<minLen) continue;
+    if(stopSet.has(w)) continue;
+    const start=Math.max(0,i-window);
+    const prev=tokens.slice(start,i);
+    if(prev.includes(w)) counts[w]=(counts[w]||0)+1;
+  }
+  return topN(counts,8);
+}
+function approxVerbCount(sent){
+  const s = sent.toLowerCase();
+  const m = s.match(/\b[a-zà-öø-ÿ]{3,}(ais|ait|aient|èrent|erent|era|erai|eras|erons|erez|é|ée|ées|és|ant|is|it|issent|ira|irai|ras|re|u|ue|us)\b/g) || [];
+  const aux = (s.match(/\b(ai|as|a|avons|avez|ont|étais|était|étaient|suis|es|est|sommes|êtes|sont)\b/g) || []).length;
+  return m.length + aux;
+}
+
+/* ========= Lexiques / proxys ========= */
+const STOP = new Set([
+  "le","la","les","un","une","des","du","de","d","et","ou","mais","car","donc","or","ni",
+  "à","au","aux","en","dans","sur","sous","chez","avec","sans","pour","par","vers","entre",
+  "ce","cet","cette","ces","je","j","tu","il","elle","on","nous","vous","ils","elles","me","te","se",
+  "mon","ma","mes","ton","ta","tes","son","sa","ses","notre","nos","votre","vos","leur","leurs",
+  "qui","que","quoi","dont","où","quand","comme","si","ne","pas","plus","jamais","rien","personne",
+  "est","suis","es","sommes","êtes","sont","étais","était","étaient","été","être","a","as","avons","avez","ont",
+  "avait","avais","avaient","eu","avoir","fait","fais","faisait","faire","très","mal","bien"
+]);
+
+// Proxy “dico fréquent” (orthographe)
+const FR_FREQ_WORDS = new Set((
+  "être avoir faire aller venir voir dire prendre mettre donner trouver penser savoir pouvoir vouloir devoir croire " +
+  "aimer parler regarder entendre répondre sentir passer rester entrer sortir tomber courir marcher vivre mourir " +
+  "jour nuit matin soir temps moment fois place main yeux tête visage bouche voix corps maison chambre rue route " +
+  "ville école classe professeur élève ami amie mère père parents enfant garçon fille " +
+  "peur joie colère tristesse envie bruit silence odeur goût lumière ombre soleil pluie vent froid chaleur " +
+  "porte fenêtre table chaise lit sac cahier stylo " +
+  "grand petite petit jeune vieux nouvelle nouveau premier dernière dernier " +
+  "hier demain aujourd'hui maintenant bientôt encore déjà toujours jamais " +
+  "ici dehors dedans " +
+  "parce que donc mais pourtant cependant alors ensuite puis enfin " +
+  "soudain brusquement finalement " +
+  "ouvrir fermer pousser tirer " +
+  "penser réfléchir imaginer comprendre " +
+  "regarder observer apercevoir " +
+  "entendre écouter " +
+  "crier chuchoter murmurer " +
+  "rire pleurer " +
+  "parfois souvent rarement " +
+  "beaucoup trop assez " +
+  "lumière ombre sombre noir nuit " +
+  "odeur froid chaud tiède humide sec " +
+  "silence grincement pas souffle"
+).split(/\s+/).filter(Boolean));
+
+const CONNECTEURS_TEMPS = [
+  "puis","ensuite","après","avant","pendant","quand","lorsque","tandis","alors","finalement","à la fin",
+  "le lendemain","plus tard","tout à coup","soudain","d'abord","au début","pendant ce temps"
+];
+
+const TURN_MARKERS = [
+  "mais","pourtant","cependant","sauf que","jusqu'à","jusqu’à","au moment où","à peine","d'un coup","d’un coup","tout à coup","soudain",
+  "alors","donc","c'est là que","c’est là que"
+];
+
+const TIME_MARKERS = ["hier","demain","aujourd'hui","aujourd’hui","le lendemain","plus tard","ce soir","cette nuit","un matin","un soir","ce jour-là","ce jour là"];
+const PLACE_MARKERS = ["dans la","dans le","dans un","au ","à la ","à l'","à l’","chez ","devant ","derrière ","près de","au fond","sur le","sous le","dans ma","dans mon"];
+const VAGUES = ["truc","chose","bizarre","chelou","trop","genre","machin","bidule","un peu","voilà","voila","bref"];
+const TICS = ["du coup","en fait","genre","bref","je sais pas","je ne sais pas","voilà","voila"];
+
+const INTERNAL_POV = [
+  "je pensais","je me suis dit","je me dis","je croyais","j'ai cru","j’ai cru","j'avais l'impression","j’avais l’impression",
+  "je sentais","je voyais","j'entendais","j’entendais","je savais","je ne savais pas","je comprenais","je ne comprenais pas",
+  "j'ai eu peur","j’ai eu peur","ça m'a rassuré","ça m’a rassuré","j'avais peur","j’avais peur","j'hésitais","j’hésitais",
+  "je n'osais pas","je n’osais pas","je me suis figé","je me suis figée","je me suis arrêté","je me suis arrêtée"
+];
+
+const LIGHT_DARK = [
+  "lumière","clair","clarté","éclairé","éclairait","éteint","ombre","noir","noire","sombre","pénombre","lampe","néon",
+  "reflet","halo","contre-jour","scintill","aveuglant","lampadaire"
+];
+
+const SENSES = {
+  vue: ["voir","regarder","apercevoir","observ","yeux","lumière","ombre","couleur","reflet","forme"],
+  ouie: ["entendre","écouter","bruit","silence","grinc","craqu","pas","chuchot","respiration","son","claquement"],
+  odorat: ["odeur","sent","parfum","pue","puait","fumée","âcre","moisi"],
+  toucher: ["froid","chaud","tiède","peau","main","rugueux","lisse","humide","sec","collait","glacé","poignée"],
+  gout: ["goût","amer","acide","salé","sucré","mordre","langue"]
+};
+
+// Détection “orthographe / grammaire” fréquente (heuristiques)
+const APOS_BAD = [
+  /\bj ai\b/g, /\bc est\b/g, /\bqu il\b/g, /\bqu elle\b/g, /\bj ai\b/g, /\bje suis pas\b/g
+];
+const CONFUSIONS = [
+  {name:"a/à", re:/\b(a)\b\s+(aller|faire|prendre|mettre|voir|dire|manger|courir|venir|partir|rentrer)\b/g, hint:"Confusion possible a/à."},
+  {name:"et/est", re:/\b(et)\b\s+(très|vraiment|content|fatigué|grand|petit|possible|impossible|bizarre|sombre)\b/g, hint:"Confusion possible et/est."},
+  {name:"sa/ça", re:/\bsa\b\s+(fait|va|m')/g, hint:"Confusion possible sa/ça."},
+  {name:"ces/ses", re:/\bces\b\s+(trucs|affaires|parents|amis|idées)\b/g, hint:"Confusion possible ces/ses."},
+  {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."}
+];
+
+// Seuils par niveau (v2 sévère)
+const LEVEL = {
+  "5e": {
+    minWords: 150,
+    minParagraphsIfOver: {words: 170, paras: 2},
+    minSensesCovered: 2,            // dont 1 non-visuel (voir gates)
+    minNonVisualSenses: 1,
+    mattrOk: 0.38, mattrGood: 0.43,
+    maxTopWordShare: 0.075,         // top word content <= 7.5%
+    minEndPunct: 3,
+    targetEndsPerWords: 40,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "4e": {
+    minWords: 180,
+    minParagraphsIfOver: {words: 180, paras: 2},
+    minSensesCovered: 2,
+    minNonVisualSenses: 1,
+    mattrOk: 0.40, mattrGood: 0.45,
+    maxTopWordShare: 0.070,
+    minEndPunct: 4,
+    targetEndsPerWords: 38,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "3e": {
+    minWords: 200,
+    minParagraphsIfOver: {words: 190, paras: 3}, // plus exigeant
+    minSensesCovered: 3,
+    minNonVisualSenses: 2,
+    mattrOk: 0.42, mattrGood: 0.47,
+    maxTopWordShare: 0.065,
+    minEndPunct: 5,
+    targetEndsPerWords: 36,
+    idealAvgMin: 11, idealAvgMax: 19
+  }
+};
+
+/* ========= Metrics ========= */
+function computeMetrics(raw){
+  const text = normalizeText(raw);
+  const lower = text.toLowerCase();
+  const paras = splitParagraphs(text);
+  const sents = splitSentences(text);
+  const tokens = tokenize(text);
+  const words = tokens.length;
+
+  const punct = countPunctuation(text);
+  const endPunct = punct["."] + punct["!"] + punct["?"];
+  const endPunctAny = endPunct + punct["…"];
+
+  const sentLens = sents.map(s=>tokenize(s).length);
+  const avgSent = mean(sentLens);
+  const sdSent = stdev(sentLens);
+
+  const longThr = Number(document.getElementById("longThr").value || 26);
+  const longVeryThr = Number(document.getElementById("longVeryThr").value || 34);
+  const longSentences = [];
+  const veryLongSentences = [];
+  for(let i=0;i<sents.length;i++){
+    const n = sentLens[i] || 0;
+    if(n >= longThr){
+      longSentences.push({idx:i+1, n, ex: sents[i].slice(0,180) + (sents[i].length>180?"…":"")});
+    }
+    if(n >= longVeryThr){
+      veryLongSentences.push({idx:i+1, n, ex: sents[i].slice(0,180) + (sents[i].length>180?"…":"")});
+    }
+  }
+
+  const filtered = tokens.filter(w=>w.length>=3 && !STOP.has(w));
+  const mattr = computeMATTR(filtered, 50);
+
+  // Hapax + fréquences
+  const freq = {};
+  for(const w of filtered) freq[w]=(freq[w]||0)+1;
+  const topWords = topN(freq, 8);
+  const hapax = Object.values(freq).filter(v=>v===1).length;
+  const hapaxRatio = filtered.length ? (hapax / filtered.length) : 0;
+  const top1Share = filtered.length && topWords.length ? (topWords[0][1] / filtered.length) : 0;
+  const top3Share = filtered.length ? (topWords.slice(0,3).reduce((a,[,n])=>a+n,0) / filtered.length) : 0;
+
+  const repeatsNear = nearRepeats(tokens, 10, 4, STOP);
+
+  // Orthographe proxy “suspects”
+  const suspects = {};
+  function isSuspect(w){
+    if(w.length < 4) return false;
+    if(w.includes("'")) return false;
+    if(FR_FREQ_WORDS.has(w)) return false;
+    if(/([a-zà-öø-ÿ])\1\1/.test(w)) return true;
+    if(/[bcdfghjklmnpqrstvwxz]{5,}/.test(w)) return true;
+    if(/(ee|aa|ii|oo|uu)$/.test(w)) return true;
+    if(w.length >= 10 && !FR_FREQ_WORDS.has(w)) return true;
+    return false;
+  }
+  for(const w of tokens) if(isSuspect(w)) suspects[w]=(suspects[w]||0)+1;
+  const suspectTop = topN(suspects, 12);
+  const suspectTotal = suspectTop.reduce((a,[,n])=>a+n,0);
+
+  // Confusions + apostrophes
+  let aposBad = 0;
+  for(const re of APOS_BAD) aposBad += (text.toLowerCase().match(re) || []).length;
+
+  const confusionHits = [];
+  for(const c of CONFUSIONS){
+    const n = (lower.match(c.re) || []).length;
+    if(n>0) confusionHits.push({name:c.name, n, hint:c.hint});
+  }
+  const confusionTotal = confusionHits.reduce((a,x)=>a+x.n,0);
+
+  // Repères temps/lieu
+  const timeHits = TIME_MARKERS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+  const placeHits = PLACE_MARKERS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+
+  // Connecteurs / tournants
+  const connCount = CONNECTEURS_TEMPS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+  const turnsCount = TURN_MARKERS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+
+  // Action pairs
+  const verbCounts = sents.map(s=>approxVerbCount(s));
+  let actionPairs = 0;
+  for(let i=0;i<verbCounts.length-1;i++){
+    if(verbCounts[i] >= 1 && verbCounts[i+1] >= 1) actionPairs++;
+  }
+
+  // POV / intériorité
+  const internalHits = INTERNAL_POV.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+  const jeCount = (lower.match(/\bje\b/g) || []).length + (lower.match(/\bj'\b/g) || []).length;
+  const ilCount = (lower.match(/\bil\b/g) || []).length + (lower.match(/\belle\b/g) || []).length;
+  const povBias = (jeCount + ilCount) ? (jeCount / (jeCount + ilCount)) : 0;
+
+  // Lumière/ombre
+  const lightHits = LIGHT_DARK.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+
+  // 5 sens
+  const sensesHits = {
+    vue: SENSES.vue.reduce((a,w)=>a+countOccurrences(lower, w), 0),
+    ouie: SENSES.ouie.reduce((a,w)=>a+countOccurrences(lower, w), 0),
+    odorat: SENSES.odorat.reduce((a,w)=>a+countOccurrences(lower, w), 0),
+    toucher: SENSES.toucher.reduce((a,w)=>a+countOccurrences(lower, w), 0),
+    gout: SENSES.gout.reduce((a,w)=>a+countOccurrences(lower, w), 0),
+  };
+  const sensesCovered = Object.values(sensesHits).filter(v=>v>0).length;
+  const nonVisualCovered = [sensesHits.ouie, sensesHits.odorat, sensesHits.toucher, sensesHits.gout].filter(v=>v>0).length;
+
+  // Vague/tics
+  const vagueCount = VAGUES.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+  const ticsCount = TICS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
+
+  // Majuscule après fin de phrase (proxy)
+  const capsAfterDot = (text.match(/[\.\!\?]\s+[a-zà-öø-ÿ]/g) || []).length;
+
+  // Paragraphes / mur de texte
+  const wallText = (paras.length === 1 && words >= 160);
+
+  return {
+    text, lower, paras, sents, tokens, words,
+    punct, endPunct, endPunctAny, capsAfterDot,
+    sentLens, avgSent, sdSent,
+    longThr, longVeryThr, longSentences, veryLongSentences,
+    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear,
+    suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
+    timeHits, placeHits, connCount, turnsCount, actionPairs,
+    internalHits, povBias, jeCount, ilCount,
+    lightHits, sensesHits, sensesCovered, nonVisualCovered,
+    vagueCount, ticsCount, wallText
+  };
+}
+
+/* ========= Gates (exigences minimales) ========= */
+function computeGates(m, level){
+  const L = LEVEL[level];
+  const gates = {
+    noEndPunct: (m.endPunct === 0),
+    tooShort: (m.words < L.minWords),
+    paragraphGate: (m.words >= L.minParagraphsIfOver.words && m.paras.length < L.minParagraphsIfOver.paras),
+    sensesGate: (m.sensesCovered < L.minSensesCovered || m.nonVisualCovered < L.minNonVisualSenses),
+    timePlaceGate: (m.timeHits < 1 || m.placeHits < 1),
+    punctuationScarce: (m.endPunct < L.minEndPunct),
+    wallTextGate: (m.wallText)
+  };
+  return {L, gates};
+}
+
+/* ========= PASS 1 : forme /10 (v2 sévère) =========
+   Sous-axes (pondérés) :
+   - Ponctuation & segmentation (3.0)
+   - Syntaxe/rythme (2.0)
+   - Orthographe/grammaire heuristique (2.5)
+   - Lexique (2.5)
+*/
+function scorePass1(m, level){
+  const audit = [];
+  const alerts = [];
+  const {L, gates} = computeGates(m, level);
+
+  // 1) Ponctuation & segmentation /3.0
+  let pseg = 0;
+
+  // fins de phrase
+  const targetEnds = Math.max(L.minEndPunct, Math.floor(m.words / L.targetEndsPerWords));
+  const endRatio = targetEnds ? clamp01(m.endPunct / targetEnds) : 0;
+  if(m.endPunct === 0){
+    pseg += 0;
+    audit.push("PSEG (0) : aucune fin de phrase (.!?).");
+    alerts.push({lvl:"bad", t:"Aucune ponctuation de fin de phrase (. ! ?) : hard gate final (≤ 9,5/20)."});
+  } else {
+    // base 0.8 + ratio * 1.2
+    pseg += 0.8 + 1.2 * endRatio;
+    audit.push(`PSEG (+) : fins de phrase ${m.endPunct} / cible ≈ ${targetEnds}.`);
+  }
+
+  // paragraphes (lisibilité)
+  if(gates.paragraphGate){
+    pseg -= 0.8;
+    audit.push(`PSEG (-) : paragraphes insuffisants (attendu ≥ ${L.minParagraphsIfOver.paras}).`);
+    alerts.push({lvl:"bad", t:`Segmentation : attendu ≥ ${L.minParagraphsIfOver.paras} paragraphes à ce niveau.`});
+  } else if(m.paras.length >= 3) {
+    pseg += 0.5;
+    audit.push("PSEG (+) : 3 paragraphes ou plus.");
+  } else if(m.paras.length === 2) {
+    pseg += 0.2;
+    audit.push("PSEG (~) : 2 paragraphes.");
+  } else if(m.paras.length === 1) {
+    pseg -= 0.2;
+    audit.push("PSEG (-) : 1 paragraphe.");
+  }
+
+  // mur de texte
+  if(gates.wallTextGate){
+    pseg -= 0.5;
+    audit.push("PSEG (-) : mur de texte (1 paragraphe + texte long).");
+    alerts.push({lvl:"warn", t:"Mur de texte : lisibilité pénalisée."});
+  }
+
+  // virgules / respiration (très simple)
+  if(m.words >= 160){
+    if(m.punct[","] >= 3) { pseg += 0.2; audit.push("PSEG (+) : virgules présentes."); }
+    else { pseg -= 0.1; audit.push("PSEG (-) : peu de virgules."); }
+  }
+
+  // minuscules après .!?
+  if(m.capsAfterDot >= 2){
+    pseg -= 0.2;
+    audit.push(`PSEG (-) : minuscules après .!? (${m.capsAfterDot}).`);
+    alerts.push({lvl:"warn", t:"Majuscules après point : à corriger."});
+  }
+
+  pseg = clamp(pseg, 0, 3.0);
+
+  // 2) Syntaxe/rythme /2.0
+  let syn = 0;
+
+  // moyenne et écart-type : si tout est plat (sd faible) ou tout est énorme (avg haut) -> pénalité
+  if(m.avgSent >= L.idealAvgMin && m.avgSent <= L.idealAvgMax) {
+    syn += 1.0;
+    audit.push(`SYN (+) : moyenne de phrase correcte (${m.avgSent.toFixed(1)}).`);
+  } else if(m.avgSent < L.idealAvgMin) {
+    syn += 0.6;
+    audit.push(`SYN (~) : phrases trop courtes en moyenne (${m.avgSent.toFixed(1)}).`);
+    alerts.push({lvl:"warn", t:"Phrases trop courtes : on veut du récit construit."});
+  } else {
+    syn += 0.4;
+    audit.push(`SYN (-) : phrases trop longues en moyenne (${m.avgSent.toFixed(1)}).`);
+  }
+
+  // variation
+  if(m.sdSent >= 6) { syn += 0.6; audit.push(`SYN (+) : variation de longueur (σ≈${m.sdSent.toFixed(1)}).`); }
+  else if(m.sdSent >= 3) { syn += 0.3; audit.push(`SYN (~) : variation moyenne (σ≈${m.sdSent.toFixed(1)}).`); }
+  else { syn += 0.1; audit.push(`SYN (-) : variation faible (σ≈${m.sdSent.toFixed(1)}).`); }
+
+  // longues phrases
+  if(m.veryLongSentences.length >= 1){
+    const pen = Math.min(0.7, 0.25 * m.veryLongSentences.length);
+    syn -= pen;
+    audit.push(`SYN (-) : très longues phrases ≥${m.longVeryThr} : ${m.veryLongSentences.length} (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:`Très longues phrases (≥${m.longVeryThr}) : ${m.veryLongSentences.length}.`});
+  } else if(m.longSentences.length >= 3){
+    syn -= 0.3;
+    audit.push(`SYN (-) : trop de phrases longues (≥${m.longThr}).`);
+  }
+
+  syn = clamp(syn, 0, 2.0);
+
+  // 3) Orthographe/grammaire heuristique /2.5
+  let ortho = 0;
+
+  // suspects
+  if(m.suspectTotal === 0) { ortho += 1.4; audit.push("ORTHO (+) : peu d’alertes “mots suspects” (proxy)."); }
+  else if(m.suspectTotal <= 2) { ortho += 1.1; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 5) { ortho += 0.8; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
+  else { ortho += 0.4; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
+
+  if(m.suspectTotal > 0){
+    alerts.push({lvl:"warn", t:`Mots suspects (proxy) : ${m.suspectTop.map(([w,n])=>`${w}(${n})`).join(", ")}`});
+  }
+
+  // apostrophes oubliées
+  if(m.aposBad >= 1){
+    const pen = Math.min(0.8, 0.25 * m.aposBad);
+    ortho -= pen;
+    audit.push(`ORTHO (-) : apostrophes manquantes (j ai / c est…) : ${m.aposBad} (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"bad", t:"Apostrophes : j ai / c est / qu il… à corriger (forme collège non négociable)."});
+  }
+
+  // confusions
+  if(m.confusionTotal >= 1){
+    const pen = Math.min(0.7, 0.2 * m.confusionTotal);
+    ortho -= pen;
+    audit.push(`ORTHO (-) : confusions possibles (${m.confusionTotal}) (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:`Confusions : ${m.confusionHits.map(x=>`${x.name}(${x.n})`).join(", ")}`});
+  }
+
+  ortho = clamp(ortho, 0, 2.5);
+
+  // 4) Lexique /2.5
+  let lex = 0;
+
+  // MATTR + hapax ratio
+  if(m.mattr >= L.mattrGood) { lex += 1.3; audit.push(`LEX (+) : diversité bonne (MATTR≈${m.mattr.toFixed(2)}).`); }
+  else if(m.mattr >= L.mattrOk) { lex += 0.9; audit.push(`LEX (~) : diversité correcte (MATTR≈${m.mattr.toFixed(2)}).`); }
+  else { lex += 0.5; audit.push(`LEX (-) : diversité faible (MATTR≈${m.mattr.toFixed(2)}).`); }
+
+  if(m.hapaxRatio >= 0.48) { lex += 0.6; audit.push(`LEX (+) : hapax élevés (${(m.hapaxRatio*100).toFixed(0)}%).`); }
+  else if(m.hapaxRatio >= 0.40) { lex += 0.4; audit.push(`LEX (~) : hapax moyens (${(m.hapaxRatio*100).toFixed(0)}%).`); }
+  else { lex += 0.2; audit.push(`LEX (-) : hapax faibles (${(m.hapaxRatio*100).toFixed(0)}%).`); }
+
+  // dominance top word content
+  if(m.top1Share > L.maxTopWordShare){
+    lex -= 0.6;
+    audit.push(`LEX (-) : mot dominant trop fréquent (${(m.top1Share*100).toFixed(1)}%).`);
+    alerts.push({lvl:"warn", t:`Lexique : un mot revient trop (${m.topWords[0][0]} ~ ${(m.top1Share*100).toFixed(1)}%).`});
+  } else if(m.top3Share > (L.maxTopWordShare*2.4)){
+    lex -= 0.3;
+    audit.push("LEX (-) : top 3 très présents (répétitions).");
+  }
+
+  // répétitions proches
+  if(m.repeatsNear.length === 0){ lex += 0.3; audit.push("LEX (+) : peu de répétitions proches."); }
+  else{
+    lex -= 0.2;
+    audit.push(`LEX (-) : répétitions proches : ${m.repeatsNear.map(([w,n])=>`${w}(${n})`).join(", ")}`);
+    alerts.push({lvl:"warn", t:`Répétitions proches : ${m.repeatsNear.map(([w,n])=>`${w}(${n})`).join(", ")}`});
+  }
+
+  // vague / tics
+  const vaguePer100 = m.words ? (m.vagueCount / m.words) * 100 : 0;
+  if(vaguePer100 >= 1.1){
+    lex -= 0.6;
+    audit.push(`LEX (-) : lexique vague trop présent (≈${vaguePer100.toFixed(1)}/100).`);
+    alerts.push({lvl:"warn", t:"Mots vagues/tics : à bannir (truc/chose/genre/bref/voilà…)."});
+  } else if(vaguePer100 >= 0.6){
+    lex -= 0.3;
+    audit.push(`LEX (-) : lexique vague présent (≈${vaguePer100.toFixed(1)}/100).`);
+  }
+
+  lex = clamp(lex, 0, 2.5);
+
+  let pass1 = pseg + syn + ortho + lex; // /10
+
+  // pénalité “trop court”
+  if(gates.tooShort){
+    pass1 = Math.min(pass1, 4.5);
+    audit.push(`PASS1 cap : texte trop court (<${L.minWords} mots) ⇒ Passe 1 ≤ 4,5/10.`);
+  }
+  // pénalité “pas de ponctuation”
+  if(gates.noEndPunct){
+    pass1 = Math.min(pass1, 3.5);
+    audit.push("PASS1 cap : aucune fin de phrase (.!?) ⇒ Passe 1 ≤ 3,5/10.");
+  }
+
+  return {score: roundToHalf(clamp(pass1, 0, 10)), audit, alerts, parts:{pseg, syn, ortho, lex}, gates};
+}
+
+/* ========= PASS 2 : “subjectif mais nécessaire” /10 (v2 sévère) =========
+   Sous-axes (pondérés) :
+   - Tenue des thèmes (1.5)
+   - Cohérence récit (2.5)
+   - Point de vue interne (1.5)
+   - Lumière/ombre (1.0)
+   - 5 sens (2.0)
+   - Intérêt (1.5) via tournants + choix + actions
+*/
+function scorePass2(m, level){
+  const audit = [];
+  const alerts = [];
+  const {L, gates} = computeGates(m, level);
+
+  // 1) Tenue des thèmes /1.5 (proxy : densité + dispersion faible)
+  let theme = 0;
+  // ici : on se sert de topWords + turns + champ “narratif” (light, senses, internal)
+  const motif = (m.lightHits + m.internalHits + m.sensesCovered + m.turnsCount + m.connCount);
+  const motifPer100 = m.words ? (motif / m.words) * 100 : 0;
+
+  if(motifPer100 >= 3.2) theme = 1.5;
+  else if(motifPer100 >= 2.2) theme = 1.2;
+  else if(motifPer100 >= 1.5) theme = 0.9;
+  else theme = 0.6;
+
+  // pénalité si top1Share très haut (impression de “tourner en rond”)
+  if(m.top1Share > (L.maxTopWordShare*1.15)) theme -= 0.2;
+
+  audit.push(`THÈME (${theme.toFixed(1)}/1.5) : motifs≈${motifPer100.toFixed(1)}/100 mots.`);
+
+  // 2) Cohérence récit /2.5 : connecteurs + actions en chaîne + fin + tournant
+  let coh = 0;
+
+  // connecteurs temps
+  if(m.connCount >= 3) coh += 0.7;
+  else if(m.connCount >= 1) coh += 0.4;
+  else coh += 0.2;
+
+  // actions enchaînées
+  const apTarget = Math.max(1, Math.floor(m.sents.length/3));
+  if(m.actionPairs >= apTarget) coh += 0.9;
+  else if(m.actionPairs >= 1) coh += 0.6;
+  else coh += 0.3;
+
+  // tournants narratifs
+  if(m.turnsCount >= 3) coh += 0.6;
+  else if(m.turnsCount >= 1) coh += 0.4;
+  else coh += 0.2;
+
+  // clôture (proxy)
+  const hasClosure = /(\bfinalement\b|\bà la fin\b|\benfin\b|\bdésormais\b|\bdepuis ce jour\b)/.test(m.lower);
+  if(hasClosure) coh += 0.3; else coh += 0.1;
+
+  // repères temps/lieu
+  if(gates.timePlaceGate){
+    coh -= 0.5;
+    audit.push("COH (-) : repères temps/lieu insuffisants.");
+    alerts.push({lvl:"bad", t:"Récit : il manque un repère de temps et/ou de lieu (minimum)."});
+  }
+
+  // mur de texte pénalise cohérence (lecture)
+  if(gates.wallTextGate) coh -= 0.3;
+
+  coh = clamp(coh, 0, 2.5);
+  audit.push(`COHÉRENCE (${coh.toFixed(1)}/2.5) : connecteurs=${m.connCount}, actions=${m.actionPairs}, tournants=${m.turnsCount}, fin=${hasClosure?"oui":"non"}.`);
+
+  // 3) Point de vue interne /1.5
+  let pov = 0;
+  if(m.internalHits >= 4) pov = 1.5;
+  else if(m.internalHits >= 2) pov = 1.1;
+  else if(m.internalHits >= 1) pov = 0.8;
+  else pov = 0.5;
+
+  // bonus si “je” très présent (si narration interne) mais pas obligatoire
+  if(m.jeCount >= 8 && m.povBias >= 0.70) pov = Math.min(1.5, pov + 0.2);
+
+  audit.push(`POV (${pov.toFixed(1)}/1.5) : marqueurs=${m.internalHits}, je=${m.jeCount}.`);
+
+  // 4) Lumière/ombre /1.0
+  let ld = 0;
+  const ldPer100 = m.words ? (m.lightHits / m.words) * 100 : 0;
+  if(ldPer100 >= 0.9) ld = 1.0;
+  else if(ldPer100 >= 0.5) ld = 0.8;
+  else if(ldPer100 >= 0.2) ld = 0.6;
+  else ld = 0.4;
+  audit.push(`LUM/OMB (${ld.toFixed(1)}/1.0) : ≈${ldPer100.toFixed(1)}/100 mots.`);
+
+  // 5) 5 sens /2.0 (avec exigence non-visuelle)
+  let sens = 0;
+  if(m.sensesCovered >= 4) sens = 2.0;
+  else if(m.sensesCovered === 3) sens = 1.6;
+  else if(m.sensesCovered === 2) sens = 1.1;
+  else if(m.sensesCovered === 1) sens = 0.7;
+  else sens = 0.4;
+
+  // exigence non-visuelle
+  if(m.nonVisualCovered < L.minNonVisualSenses){
+    sens = Math.min(sens, 0.9);
+    audit.push(`SENS cap : non-visuels insuffisants (attendu ≥ ${L.minNonVisualSenses}).`);
+    alerts.push({lvl:"bad", t:"Sensoriel : ajoute au moins de l’ouïe / odeur / toucher (pas seulement la vue)."});
+  }
+  audit.push(`SENS (${sens.toFixed(1)}/2.0) : couverts=${m.sensesCovered}/5, non-visuels=${m.nonVisualCovered}.`);
+
+  // 6) Intérêt /1.5 : tournants + choix + réduction de tics
+  let interest = 0.6;
+
+  const turnsPer100 = m.words ? (m.turnsCount / m.words) * 100 : 0;
+  const ticsPer100 = m.words ? (m.ticsCount / m.words) * 100 : 0;
+
+  // densité de tournants (on veut une scène qui bouge)
+  if(turnsPer100 >= 1.2) interest += 0.6;
+  else if(turnsPer100 >= 0.7) interest += 0.4;
+  else interest += 0.2;
+
+  // “choix” du narrateur (proxy)
+  const choice = (m.lower.match(/\b(j'ai décidé|j’ai décidé|j'ai choisi|j’ai choisi|je me suis forcé|je me suis forcée|j'ai préféré|j’ai préféré|je n'ai pas osé|je n’ai pas osé)\b/g) || []).length;
+  if(choice >= 1) interest += 0.3;
+
+  // pénalité tics relâchement
+  if(ticsPer100 >= 1.0){
+    interest -= 0.4;
+    alerts.push({lvl:"warn", t:"Tics (du coup/en fait/genre/bref…) : ils affaiblissent la tenue."});
+  }
+
+  // pénalité récit “plat” : actionPairs trop faible
+  if(m.actionPairs === 0) interest -= 0.2;
+
+  interest = clamp(interest, 0, 1.5);
+  audit.push(`INTÉRÊT (${interest.toFixed(1)}/1.5) : tournants≈${turnsPer100.toFixed(1)}/100, choix=${choice}, tics≈${ticsPer100.toFixed(1)}/100.`);
+
+  let pass2 = theme + coh + pov + ld + sens + interest; // /10
+
+  // caps “sévères” si exigences minimales non respectées
+  if(gates.tooShort){
+    pass2 = Math.min(pass2, 5.5);
+    audit.push(`PASS2 cap : texte trop court (<${L.minWords}) ⇒ Passe 2 ≤ 5,5/10.`);
+  }
+  if(gates.timePlaceGate){
+    pass2 = Math.min(pass2, 6.0);
+    audit.push("PASS2 cap : manque de repères temps/lieu ⇒ Passe 2 ≤ 6/10.");
+  }
+  if(gates.sensesGate){
+    pass2 = Math.min(pass2, 6.0);
+    audit.push("PASS2 cap : sensoriel insuffisant ⇒ Passe 2 ≤ 6/10.");
+  }
+
+  return {score: roundToHalf(clamp(pass2, 0, 10)), audit, alerts, parts:{theme, coh, pov, ld, sens, interest}, gates};
+}
+
+/* ========= PASS 3 : Excellence /3 (bonus haut niveau) =========
+   S'active surtout quand la forme est déjà “tenable”.
+   - Fin maîtrisée (1.0)
+   - Motifs tenus (1.0)
+   - Scène (actions + perceptions + réactions) (1.0)
+*/
+function scorePass3(m, level, p1, p2){
+  const audit = [];
+  const alerts = [];
+
+  // Garde-fou : si forme trop faible, pas d’excellence (évite d’offrir des points aux copies illisibles)
+  const formOK = (p1?.score ?? 0) >= 6.5 && m.endPunct > 0 && m.words >= (LEVEL[level]?.minWords ?? 150);
+
+  if(!formOK){
+    audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
+    return {score: 0, audit, alerts, parts:{ending:0, motifs:0, scene:0}};
+  }
+
+  // --- 1) Fin maîtrisée /1
+  let ending = 0;
+  const sents = m.sents || [];
+  const last = (sents[sents.length-1] || "").toLowerCase();
+  const last2 = (sents[sents.length-2] || "").toLowerCase();
+
+  const badClosers = /\b(bref|voilà|voila|fin|c'est tout|c’est tout|je sais pas|j'sais pas)\b/;
+  const goodDecisions = /\b(j'ai décidé|j’ai décidé|je décide|j'ai compris|j’ai compris|je comprends|je me suis promis|je me promets|je n'ai plus voulu|je n’ai plus voulu|désormais|depuis ce jour|à partir de ce jour)\b/;
+  const hasEndPunct = /[.!?…]\s*$/.test((sents[sents.length-1] || "").trim());
+
+  if(hasEndPunct) ending += 0.35;
+  if(goodDecisions.test(last) || goodDecisions.test(last2)) ending += 0.45;
+  if(!badClosers.test(last) && !badClosers.test(last2)) ending += 0.25;
+  ending = clamp(ending, 0, 1);
+
+  audit.push(`EXC-FIN (${ending.toFixed(1)}/1) : fin ${hasEndPunct?"ponctuée":"faible"} ; ${goodDecisions.test(last)||goodDecisions.test(last2)?"décision/effet":"pas d'effet net"} ; ${(!badClosers.test(last)&&!badClosers.test(last2))?"pas de tic":"tic de clôture"}.`);
+
+  // --- 2) Motifs tenus /1 (cohérence fine)
+  let motifs = 0;
+
+  // On prend 3 mots “contenu” (topWords), et on vérifie leur présence dans début/milieu/fin
+  const top = (m.topWords || []).slice(0, 3).map(x=>x[0]).filter(Boolean);
+  const thirds = splitThirds(m.lower || "");
+
+  let motifHits = 0;
+  for(const w of top){
+    const inA = thirds.a.includes(w);
+    const inB = thirds.b.includes(w);
+    const inC = thirds.c.includes(w);
+    // bonus si le mot traverse au moins 2 zones, gros bonus si 3 zones
+    if(inA && inB && inC) motifHits += 1.0;
+    else if((inA&&inB) || (inB&&inC) || (inA&&inC)) motifHits += 0.6;
+    else if(inA || inB || inC) motifHits += 0.25;
+  }
+  // normalisation (0..1)
+  if(top.length){
+    motifs = clamp(motifHits / top.length, 0, 1);
+  } else {
+    motifs = 0.2; // texte trop court/plat -> pas d’excellence, mais pas 0 automatique
+  }
+
+  audit.push(`EXC-MOTIFS (${motifs.toFixed(1)}/1) : mots-motifs = ${top.join(", ") || "—"}.`);
+
+  // --- 3) Scène /1 : actions + perceptions + réactions (proxy)
+  let scene = 0;
+
+  // actionPairs = chaîne de verbes (proxy), senses non-visuels, internalHits
+  const ap = m.actionPairs || 0;
+  const senseNV = m.nonVisualCovered || 0;
+  const pov = m.internalHits || 0;
+
+  // barème simple
+  if(ap >= Math.max(1, Math.floor((m.sents?.length || 3)/3))) scene += 0.45;
+  else if(ap >= 1) scene += 0.30;
+  else scene += 0.15;
+
+  if(senseNV >= 2) scene += 0.35;
+  else if(senseNV >= 1) scene += 0.25;
+
+  if(pov >= 3) scene += 0.25;
+  else if(pov >= 1) scene += 0.15;
+
+  // pénaliser les tics en fin de copie (ça casse la tenue)
+  const ticsTail = (m.lower || "").slice(-350);
+  const ticsTailN = TICS.reduce((a,w)=>a+countOccurrences(ticsTail, w), 0);
+  if(ticsTailN >= 2) scene -= 0.2;
+
+  scene = clamp(scene, 0, 1);
+  audit.push(`EXC-SCÈNE (${scene.toFixed(1)}/1) : actions=${ap}, non-visuels=${senseNV}, POV=${pov}.`);
+
+  const score = roundToHalf(ending + motifs + scene); // /3
+  return {score, audit, alerts, parts:{ending, motifs, scene}};
+}
+
+// petit helper : découper le texte en tiers
+function splitThirds(lower){
+  const s = lower || "";
+  const n = s.length;
+  const t = Math.max(1, Math.floor(n/3));
+  return {
+    a: s.slice(0, t),
+    b: s.slice(t, 2*t),
+    c: s.slice(2*t)
+  };
+}
+
+
+/* ========= Finale /20 + commentaires ========= */
+function buildFinal(m, p1, p2, level){
+  const audit = [];
+  const alerts = [];
+  const {L, gates} = computeGates(m, level);
+  const p3 = scorePass3(m, level, p1, p2);
+
+  audit.push("— Passe 1 (forme) —");
+  audit.push(...p1.audit);
+  audit.push("— Passe 2 (contenu) —");
+  audit.push(...p2.audit);
+  audit.push("— Passe 3 (excellence) —");
+  audit.push(...p3.audit);
+  alerts.push(...p1.alerts, ...p2.alerts);
+
+  // Poids : v2 recommande un ajustement par niveau (on écrase légèrement l’UI si incohérent)
+  let w1 = Number(document.getElementById("w1").value || 0.55);
+  let w2 = Number(document.getElementById("w2").value || 0.45);
+  const ws = w1 + w2;
+  if(ws <= 0){ w1 = 0.55; w2 = 0.45; } else { w1 /= ws; w2 /= ws; }
+
+  // Recommandation niveau (sans forcer) : afficher dans audit
+  const rec = (level==="5e") ? "Reco niveau : 60/40 (forme/contenu)." : (level==="4e") ? "Reco niveau : 55/45." : "Reco niveau : 50/50 (ou 45/55).";
+  audit.push(rec);
+
+  // Score pondéré /20
+  let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
+
+
+  // Hard gates (plafonds)
+  if(gates.noEndPunct){
+    final = Math.min(final, 9.5);
+    audit.push("Plafond : aucune ponctuation de fin de phrase (. ! ?) ⇒ note ≤ 9,5/20.");
+  }
+  if(gates.tooShort){
+    const cap = (level==="3e") ? 11.0 : (level==="4e") ? 12.0 : 13.0;
+    final = Math.min(final, cap);
+    audit.push(`Plafond : texte trop court (<${L.minWords} mots) ⇒ note ≤ ${cap}/20.`);
+  }
+  if(gates.paragraphGate){
+    final = Math.min(final, 14.0);
+    audit.push("Plafond : segmentation insuffisante (paragraphes) ⇒ note ≤ 14/20.");
+  }
+  if(gates.sensesGate){
+    final = Math.min(final, 14.0);
+    audit.push("Plafond : sensoriel insuffisant ⇒ note ≤ 14/20.");
+  }
+  if(gates.timePlaceGate){
+    final = Math.min(final, 14.0);
+    audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
+  }
+
+  // Verdict
+  let verdict = "";
+  if(final >= 17) verdict = "Très solide : récit net, maîtrisé, incarné.";
+  else if(final >= 14) verdict = "Bon : des qualités réelles, mais des fragilités empêchent d’aller plus haut.";
+  else if(final >= 10) verdict = "Fragile : lecture possible, mais outils narratifs et forme à renforcer.";
+  else verdict = "Insuffisant : base formelle et/ou narrative instable à ce niveau.";
+
+  // Forces / axes (choix sévère, priorité à ce qui bloque)
+  const forces = [];
+  const axes = [];
+
+  // Forces (p1/p2)
+  if(p1.parts.pseg >= 2.2) forces.push("Ponctuation et segmentation plutôt tenables : la lecture avance.");
+  if(p1.parts.lex >= 1.9) forces.push("Lexique plutôt varié : effort réel de précision.");
+  if(p1.parts.ortho >= 1.8) forces.push("Orthographe globalement correcte (selon les proxys) : copie plus propre.");
+  if(p2.parts.coh >= 1.8) forces.push("Récit cohérent : enchaînements et tournants repérables.");
+  if(p2.parts.pov >= 1.2) forces.push("Point de vue interne présent : on suit le narrateur de l’intérieur.");
+  if(p2.parts.sens >= 1.6) forces.push("Sensoriel actif : la scène devient tangible.");
+  if(p2.parts.ld >= 0.8) forces.push("Lumière/ombre utilisées : ambiance plus tenue.");
+
+  if(!forces.length) forces.push("Intention de raconter perceptible, mais la copie n’est pas assez outillée.");
+
+  // Axes (gates d’abord)
+  if(gates.noEndPunct) axes.push("Ponctuation : poser des points (. ! ?) — sinon la note reste sous 10/20.");
+  if(gates.tooShort) axes.push(`Longueur : viser au moins ${L.minWords} mots pour développer (30 lignes ≠ 8 phrases).`);
+  if(gates.paragraphGate) axes.push(`Segmentation : ${L.minParagraphsIfOver.paras} paragraphes minimum (début / bascule / fin).`);
+  if(gates.timePlaceGate) axes.push("Repères : installer un temps + un lieu dès le début.");
+  if(gates.sensesGate) axes.push(`Sensoriel : ajouter au moins ${L.minNonVisualSenses} sens non-visuel (ouïe/odeur/toucher/goût).`);
+
+  // Axes techniques
+  if(p1.parts.ortho <= 1.1) axes.push("Relecture grammaticale : apostrophes + confusions (a/à, et/est, sa/ça…).");
+  if(p1.parts.syn <= 0.9) axes.push("Syntaxe : couper les phrases trop longues, varier le rythme, clarifier les enchaînements.");
+  if(p1.parts.lex <= 1.2) axes.push("Lexique : réduire les mots vagues (truc/chose/genre/bref/voilà) et les répétitions.");
+  if(p2.parts.coh <= 1.2) axes.push("Cohérence : marquer une bascule (mais/sauf que/tout à coup) + une conséquence + une fin.");
+  if(p2.parts.interest <= 0.9) axes.push("Intérêt : écrire en scènes (actions + décision), éviter le résumé.");
+
+  // Objectif mesurable (1 consigne)
+  let objective = `Prochain texte : ${L.minParagraphsIfOver.paras} paragraphes, ≥ ${L.minWords} mots, 1 bascule (“mais / sauf que…”), et 3 notations sensorielles dont 1 non-visuelle.`;
+  if(gates.noEndPunct) objective = "Prochain texte : au moins 6 fins de phrase (. ! ?) + majuscule après chaque point.";
+  else if(gates.tooShort) objective = `Prochain texte : atteindre ≥ ${L.minWords} mots et écrire en 3 paragraphes (début / problème / fin).`;
+  else if(gates.sensesGate) objective = `Prochain texte : intégrer 3 sens dont ${L.minNonVisualSenses} non-visuels (ouïe/odeur/toucher/goût).`;
+  else if(gates.timePlaceGate) objective = "Prochain texte : première phrase = repère de temps + repère de lieu (immédiats).";
+
+  // commentaire prof / élève
+  const mode = document.getElementById("modeComment").value || "prof";
+  const student = (document.getElementById("student").value || "").trim();
+  const who = student ? `Élève : ${student}\n` : "";
+
+  const f2 = [forces[0], forces[1] || forces[0]];
+  const a2 = [axes[0], axes[1] || axes[0]];
+
+  let comment = "";
+  if(mode === "eleve"){
+    comment =
+`${who}Niveau : ${level}
+Note : ${final}/20
+
+Ce qui est bien :
+- ${f2[0]}
+- ${f2[1]}
+
+À faire maintenant :
+- ${a2[0]}
+- ${a2[1]}
+
+Pour la prochaine fois :
+- ${objective}`;
+  } else {
+    comment =
+`${who}Niveau : ${level}
+Note : ${final}/20
+Passe 1 (forme) : ${p1.score}/10 • Passe 2 (contenu) : ${p2.score}/10
+Pondération : ${(w1*100).toFixed(0)}% / ${(w2*100).toFixed(0)}%
+
+Forces :
+- ${f2[0]}
+- ${f2[1]}
+
+Ce qui bloque la note :
+- ${a2[0]}
+- ${a2[1]}
+
+Objectif mesurable :
+- ${objective}`;
+  }
+
+  // Alerts HTML
+  const alertHtml = alerts.length ? alerts.map(a=>{
+    const cls = a.lvl === "bad" ? "bad" : (a.lvl === "warn" ? "warn" : "ok");
+    return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
+  }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
+
+  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3};
+
+}
+
+/* ========= Exports ========= */
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+function makePayload(state){
+  const {level, m, p1, p2, fin} = state;
+  const student = (document.getElementById("student").value || "").trim();
+  return {
+    timestamp: new Date().toISOString(),
+    tool: "Evaluator-v2-severe",
+    student,
+    level,
+    weights: fin.weights,
+    gates: fin.gates,
+    thresholds: fin.levelCfg,
+    pass1: { score10: p1.score, parts: p1.parts },
+    pass2: { score10: p2.score, parts: p2.parts },
+    final: { score20: fin.final, verdict: fin.verdict },
+    metrics: {
+      words: m.words,
+      sentences: m.sents.length,
+      paragraphs: m.paras.length,
+      avgSentenceLen: Number(m.avgSent.toFixed(2)),
+      sdSentenceLen: Number(m.sdSent.toFixed(2)),
+      endPunct: m.endPunct,
+      punctuation: m.punct,
+      mattr: Number(m.mattr.toFixed(4)),
+      hapaxRatio: Number(m.hapaxRatio.toFixed(4)),
+      top1Share: Number(m.top1Share.toFixed(4)),
+      topWords: m.topWords,
+      suspectTotalProxy: m.suspectTotal,
+      suspectTopProxy: m.suspectTop,
+      apostrophesBad: m.aposBad,
+      confusions: m.confusionHits,
+      timeHits: m.timeHits,
+      placeHits: m.placeHits,
+      connCount: m.connCount,
+      turnsCount: m.turnsCount,
+      actionPairsProxy: m.actionPairs,
+      internalHits: m.internalHits,
+      lightHits: m.lightHits,
+      sensesHits: m.sensesHits,
+      sensesCovered: m.sensesCovered,
+      nonVisualCovered: m.nonVisualCovered,
+      vagueCount: m.vagueCount,
+      ticsCount: m.ticsCount,
+      longSentences: m.longSentences.length,
+      veryLongSentences: m.veryLongSentences.length
+    },
+    audit: fin.audit,
+    comment: fin.comment
+  };
+}
+function toCSVRow(fields){
+  const esc = (v)=>`"${String(v ?? "").replace(/"/g,'""')}"`;
+  return fields.map(esc).join(",");
+}
+function exportCSV(state){
+  const {level, m, p1, p2, fin} = state;
+  const student = (document.getElementById("student").value || "").trim();
+  const gates = Object.entries(fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|");
+  const topWord = (m.topWords[0]?.[0] ?? "");
+  const header = [
+    "timestamp","student","level","final20","pass1_10","pass2_10","words","sentences","paragraphs",
+    "endPunct","avgSent","sdSent","mattr","hapaxRatio","top1Share","topWord","suspects","aposBad","confusions",
+    "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
+  ];
+  const row = [
+    new Date().toISOString(), student, level, fin.final, p1.score, p2.score,
+    m.words, m.sents.length, m.paras.length,
+    m.endPunct, m.avgSent.toFixed(2), m.sdSent.toFixed(2), m.mattr.toFixed(4), m.hapaxRatio.toFixed(4),
+    m.top1Share.toFixed(4), topWord, m.suspectTotal, m.aposBad, m.confusionTotal,
+    m.timeHits, m.placeHits, m.sensesCovered, m.nonVisualCovered, m.connCount, m.turnsCount, m.actionPairs,
+    gates
+  ];
+  const csv = header.join(",") + "\n" + toCSVRow(row) + "\n";
+  downloadFile("evaluator_v2_export.csv", csv, "text/csv;charset=utf-8");
+}
+
+/* ========= Historique local ========= */
+const HIST_KEY = "evaluator_v2_history";
+function loadHistory(){
+  try{
+    const raw = localStorage.getItem(HIST_KEY);
+    if(!raw) return [];
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+function saveHistory(arr){
+  localStorage.setItem(HIST_KEY, JSON.stringify(arr));
+}
+function renderHistory(){
+  const box = document.getElementById("historyBox");
+  const info = document.getElementById("histInfo");
+  const arr = loadHistory();
+  info.textContent = `${arr.length} entrée(s)`;
+  if(!arr.length){
+    box.textContent = "—";
+    return;
+  }
+  const lines = arr.slice(-12).reverse().map(x=>{
+    const d = new Date(x.timestamp);
+    const ds = isNaN(d.getTime()) ? x.timestamp : d.toLocaleString();
+    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 — mots:${x.words} — gates:${x.gates||"—"}`;
+  }).join("\n");
+  box.textContent = lines;
+}
+
+/* ========= UI render ========= */
+function renderAll(level, m, p1, p2, fin){
+  const L = fin.levelCfg;
+
+  document.getElementById("kWords").textContent = m.words;
+  document.getElementById("kWordsHint").textContent = `Min niveau : ${L.minWords} mots (v2 sévère).`;
+
+  document.getElementById("kSP").textContent = `${m.sents.length} / ${m.paras.length}`;
+  document.getElementById("kSegHint").textContent = `Attendu si long : ≥ ${L.minParagraphsIfOver.paras} paragraphes.`;
+
+  document.getElementById("kLen").textContent = `${m.avgSent.toFixed(1)} ± ${m.sdSent.toFixed(1)}`;
+  document.getElementById("kLenHint").textContent = `Phrases longues : ${m.longSentences.length} • très longues : ${m.veryLongSentences.length}`;
+
+  document.getElementById("kPunct").textContent = `${m.endPunct} (${m.punct["…"]}…) ,${m.punct[","]}`;
+  document.getElementById("kPunctHint").textContent = `Min fins de phrase : ${L.minEndPunct} • cible ≈ 1/ ${L.targetEndsPerWords} mots.`;
+
+const p3s = fin.p3?.score ?? 0;
+document.getElementById("passScores").textContent =
+  `${p1.score.toFixed(1)}/10  •  ${p2.score.toFixed(1)}/10  •  +${p3s.toFixed(1)} exc`;
+  document.getElementById("finalScore").textContent = `${fin.final.toFixed(1)}/20`;
+  document.getElementById("finalVerdict").textContent = fin.verdict;
+
+  const pct = clamp01(fin.final/20) * 100;
+  document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
+
+  const ul = document.getElementById("auditList");
+  ul.innerHTML = "";
+  for(const line of fin.audit){
+    const li = document.createElement("li");
+    li.textContent = line;
+    ul.appendChild(li);
+  }
+
+  document.getElementById("alerts").innerHTML = fin.alertHtml;
+  document.getElementById("comment").textContent = fin.comment;
+
+  // Probe contenu
+  const probe =
+`Repères : temps=${m.timeHits} • lieu=${m.placeHits}
+Tournants : ${m.turnsCount} • connecteurs temps : ${m.connCount}
+Actions enchaînées : ${m.actionPairs}
+Excellence : +${(fin.p3?.score ?? 0).toFixed(1)} /3
+POV interne : ${m.internalHits} (je=${m.jeCount})
+Lumière/ombre : ${m.lightHits}
+Sens couverts : ${m.sensesCovered}/5 (non-visuels=${m.nonVisualCovered})
+Lexique : MATTR=${m.mattr.toFixed(2)} • hapax=${(m.hapaxRatio*100).toFixed(0)}% • top1=${(m.top1Share*100).toFixed(1)}% (${m.topWords[0]?.[0]||"—"})
+Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}`;
+
+
+  renderHistory();
+}
+
+/* ========= Actions ========= */
+const elText = document.getElementById("text");
+const status = document.getElementById("status");
+function setStatus(s){ status.textContent = s; }
+
+document.getElementById("btnEval").addEventListener("click", ()=>{
+  try{
+    document.getElementById("errBox").style.display = "none";
+    const raw = normalizeText(elText.value);
+    if(!raw){ setStatus("Colle un texte d’abord."); return; }
+    setStatus("Analyse…");
+    const level = document.getElementById("level").value;
+    const m = computeMetrics(raw);
+    const p1 = scorePass1(m, level);
+    const p2 = scorePass2(m, level);
+    const fin = buildFinal(m, p1, p2, level);
+    renderAll(level, m, p1, p2, fin);
+    window.__last = {level, m, p1, p2, fin};
+    setStatus("Terminé.");
+  } catch(e){
+    const errBox = document.getElementById("errBox");
+    errBox.style.display = "block";
+    errBox.textContent = "Erreur pendant l’évaluation : " + (e?.message || e);
+    setStatus("Erreur.");
+  }
+});
+
+document.getElementById("btnClear").addEventListener("click", ()=>{
+  elText.value = "";
+  setStatus("Effacé.");
+});
+
+document.getElementById("btnExample").addEventListener("click", ()=>{
+  // Exemple volontairement “bon” mais pas parfait : v2 doit rester exigeant
+  elText.value =
+`Je suis rentré tard, et la pluie avait laissé une odeur de goudron chaud sur le trottoir. Dans l’entrée, le plafonnier clignotait : une lumière jaune, mal assurée.
+Sur le paillasson, une enveloppe m’attendait. Pas de timbre, pas d’adresse : seulement mon prénom, écrit d’une main pressée. J’ai hésité, puis je l’ai ouverte avec le pouce.
+À l’intérieur, une clé froide et un papier plié. Trois mots : « pas ce soir ». J’ai entendu, dans l’escalier, les pas du voisin ; un frottement de semelle, puis le silence.
+Je suis resté sur le seuil. Je me suis dit que si j’entrais, quelque chose me suivrait, quelque chose que je ne verrais pas. Alors j’ai refermé la porte doucement, et j’ai descendu les marches, une à une.`;
+  setStatus("Exemple inséré.");
+});
+
+document.getElementById("btnCopy").addEventListener("click", async ()=>{
+  const txt = document.getElementById("comment").textContent || "";
+  if(!txt || txt === "—") return;
+  try{
+    await navigator.clipboard.writeText(txt);
+    setStatus("Commentaire copié.");
+  } catch {
+    setStatus("Copie impossible (permissions navigateur).");
+  }
+});
+
+document.getElementById("btnExportTxt").addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  downloadFile("evaluator_v2_commentaire.txt", last.fin.comment + "\n", "text/plain;charset=utf-8");
+  setStatus("TXT exporté.");
+});
+
+document.getElementById("btnExportJson").addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const payload = makePayload(last);
+  downloadFile("evaluator_v2_rapport.json", JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  setStatus("JSON exporté.");
+});
+
+document.getElementById("btnExportCsv").addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  exportCSV(last);
+  setStatus("CSV exporté.");
+});
+
+document.getElementById("btnSave").addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const student = (document.getElementById("student").value || "").trim();
+  const gates = Object.entries(last.fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|") || "—";
+  const entry = {
+    timestamp: new Date().toISOString(),
+    student,
+    level: last.level,
+    final20: last.fin.final,
+    pass1_10: last.p1.score,
+    pass2_10: last.p2.score,
+    words: last.m.words,
+    gates
+  };
+  const arr = loadHistory();
+  arr.push(entry);
+  saveHistory(arr);
+  renderHistory();
+  setStatus("Entrée sauvegardée.");
+});
+
+document.getElementById("btnClearHistory").addEventListener("click", ()=>{
+  localStorage.removeItem(HIST_KEY);
+  renderHistory();
+  setStatus("Historique vidé.");
+});
+function showView(view){
+  const home = document.getElementById("homeView");
+  const app  = document.getElementById("appView");
+  if(!home || !app) return;
+
+  if(view === "app"){
+    home.hidden = true;
+    app.hidden = false;
+    const t = document.getElementById("text");
+    if(t) t.focus();
+    window.scrollTo({top: 0, behavior: "smooth"});
+  } else {
+    app.hidden = true;
+    home.hidden = false;
+    window.scrollTo({top: 0, behavior: "smooth"});
+  }
+}
+
+document.getElementById("goHome")?.addEventListener("click", ()=>showView("home"));
+document.getElementById("goApp")?.addEventListener("click",  ()=>showView("app"));
+document.getElementById("startBtn")?.addEventListener("click", ()=>showView("app"));
+
+document.getElementById("quickPasteBtn")?.addEventListener("click", ()=>{
+  showView("app");
+  const t = document.getElementById("text");
+  if(!t) return;
+  t.value =
+`Je suis rentré tard, et la pluie avait laissé une odeur de goudron chaud sur le trottoir. Dans l’entrée, le plafonnier clignotait.
+Sur le paillasson, une enveloppe m’attendait, sans timbre, avec mon prénom au feutre. J’ai hésité, puis je l’ai ouverte.
+À l’intérieur, une clé froide et un papier plié. Trois mots : « pas ce soir ». J’ai entendu les pas du voisin dans l’escalier.
+J’ai posé l’oreille contre la porte, puis j’ai redescendu les marches, une à une, en me demandant depuis quand on pouvait prévenir quelqu’un de ne pas rentrer chez lui.`;
+});
+showView("home");
+renderHistory();
+</script>
+</body>
+</html>
