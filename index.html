@@ -457,6 +457,20 @@
 
       <div style="margin-top:10px">
         <details open>
+          <summary>Langue : erreurs probables</summary>
+          <div class="out" id="langueDetail">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>À refaire (5 min)</summary>
+          <div class="out" id="drillsBox">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
           <summary>Rapport dialogues</summary>
           <div class="out" id="dialogueReport">—</div>
         </details>
@@ -807,9 +821,13 @@ const APOS_BAD = [
 const CONFUSIONS = [
   {name:"a/à", re:/\b(a)\b\s+(aller|faire|prendre|mettre|voir|dire|manger|courir|venir|partir|rentrer)\b/g, hint:"Confusion possible a/à."},
   {name:"et/est", re:/\b(et)\b\s+(très|vraiment|content|fatigué|grand|petit|possible|impossible|bizarre|sombre)\b/g, hint:"Confusion possible et/est."},
-  {name:"sa/ça", re:/\bsa\b\s+(fait|va|m')/g, hint:"Confusion possible sa/ça."},
   {name:"ces/ses", re:/\bces\b\s+(trucs|affaires|parents|amis|idées)\b/g, hint:"Confusion possible ces/ses."},
-  {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."}
+  {name:"son/sont", re:/\bson\b\s+(arrivé|arrivés|venus|prêts|contents|fatigués)\b/g, hint:"Confusion possible son/sont."},
+  {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."},
+  {name:"sa/ça", re:/\bsa\b\s+(fait|va|m')/g, hint:"Confusion possible sa/ça."},
+  {name:"ce/se", re:/\bce\b\s+(sent|souvient|lève|leve|trompe|cache|voit)\b/g, hint:"Confusion possible ce/se."},
+  {name:"c'est/s'est", re:/\bc['’]est\b\s+(lavé|lavée|cassé|cassée|trompé|trompée|blessé|blessée)\b/g, hint:"Confusion possible c'est/s'est."},
+  {name:"leur/leurs", re:/\bleur\b\s+(yeux|mains|parents|affaires|amis|habits|chaussures)\b/g, hint:"Confusion possible leur/leurs."}
 ];
 
 const DIALOGUE_INCISORS = ["dit","demanda","souffla","répondit","murmura","cria","ajouta","lâcha","reprit","annonça"];
@@ -958,6 +976,34 @@ function computeMetrics(raw){
     if(n > 0) confusionHits.push({name:c.name, n, hint:c.hint, evidence: matches});
   }
   const confusionTotal = confusionHits.reduce((a,x)=>a+x.n,0);
+
+  const agreementLikelyDet = [];
+  for(const m0 of lower.matchAll(/\b(les|des|ces|mes|tes|ses|nos|vos|leurs)\s+([a-zà-öø-ÿ-]{3,})\b/gi)){
+    const w = (m0[2]||"").toLowerCase();
+    if(/(s|x|aux)$/.test(w)) continue;
+    const start = m0.index || 0;
+    const end = start + String(m0[0]||"").length;
+    agreementLikelyDet.push({rule:"det_pluriel", evidence: mkEvidence(text, start, end), token:w});
+    if(agreementLikelyDet.length >= 8) break;
+  }
+
+  const agreementLikelySubj = [];
+  for(const m0 of lower.matchAll(/\b(ils|elles)\s+(est|a|fait|va|dit)\b/gi)){
+    const start = m0.index || 0;
+    const end = start + String(m0[0]||"").length;
+    agreementLikelySubj.push({rule:"sujet_pluriel", evidence: mkEvidence(text, start, end), token:(m0[0]||"")});
+    if(agreementLikelySubj.length >= 8) break;
+  }
+
+  const hierHits = (lower.match(/\bhier\b/g)||[]).length;
+  const presentMatches = [...lower.matchAll(/\b(je|tu|il|elle|on|nous|vous|ils|elles)\s+[a-zà-öø-ÿ]{2,}(e|es|ons|ez|ent)\b/g)];
+  const presentCount = presentMatches.length;
+  const tenseMixWarn = {
+    active: (hierHits >= 1 && presentCount >= 4),
+    hierHits,
+    presentCount,
+    evidence: presentMatches.slice(0,3).map(m0=>mkEvidence(text, m0.index||0, (m0.index||0)+String(m0[0]||"").length))
+  };
 
   // Repères temps/lieu
   const timeHits = TIME_MARKERS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
@@ -1112,6 +1158,7 @@ function computeMetrics(raw){
     filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
     offsetMap: {kind:"normalized_identity", length:text.length},
+    agreementLikelyDet, agreementLikelySubj, tenseMixWarn,
     timeHits, placeHits, connCount, turnsCount, actionPairs,
     dialogue,
     desc: {
@@ -1305,6 +1352,23 @@ function scorePass1(m, level){
     alerts.push({lvl:"warn", t:`Confusions : ${m.confusionHits.map(x=>`${x.name}(${x.n})`).join(", ")}`});
   }
 
+  const agDetN = (m.agreementLikelyDet||[]).length;
+  const agSubjN = (m.agreementLikelySubj||[]).length;
+  const agN = agDetN + agSubjN;
+  if(agN > 0){
+    const pen = Math.min(0.7, 0.12 * agN);
+    ortho -= pen;
+    audit.push(`ORTHO (-) : accords probables à vérifier (${agN}) (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:`Accords probables : ${agN} occurrence(s) à contrôler.`});
+  }
+
+  if(m.tenseMixWarn?.active){
+    const pen = 0.2;
+    ortho -= pen;
+    audit.push(`ORTHO (~) : mélange de temps probable ("hier" + présent fréquent) (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:"Conjugaison : mélange de temps probable (passé/présent)."});
+  }
+
   ortho = clamp(ortho, 0, 2.5);
 
   // 4) Lexique /2.5
@@ -1373,6 +1437,13 @@ function scorePass1(m, level){
   trace.push(traceItem("pass1","lex", lex, "Lexique / répétitions / tics."));
   for(const c of (m.confusionHits||[])){
     trace.push(traceItem("pass1", `confusion_${c.name}`, -0.1*c.n, `${c.name} détecté (${c.n}).`, (c.evidence && c.evidence.length) ? c.evidence : firstEvidence(m.text)));
+  }
+  if((m.agreementLikelyDet||[]).length + (m.agreementLikelySubj||[]).length){
+    const ev = [...(m.agreementLikelyDet||[]).map(x=>x.evidence), ...(m.agreementLikelySubj||[]).map(x=>x.evidence)].slice(0,4);
+    trace.push(traceItem("pass1", "accords_probables", -0.1*ev.length, "Accords probables (heuristique).", ev));
+  }
+  if(m.tenseMixWarn?.active){
+    trace.push(traceItem("pass1", "temps_mix_probable", -0.2, "Mélange de temps probable (heuristique).", m.tenseMixWarn.evidence || firstEvidence(m.text)));
   }
 
   return {score: roundToHalf(clamp(pass1, 0, 10)), audit: traceToAudit(trace), alerts, parts:{pseg, syn, ortho, lex}, gates, trace};
@@ -1806,6 +1877,30 @@ function diagnoseRubricModule(moduleName, moduleState, trace){
   return "À renforcer.";
 }
 
+function buildMicroDrills(m, gates){
+  const drills = [];
+  const confEx = [];
+  for(const c of (m.confusionHits||[])){
+    for(const e of (c.evidence||[]).slice(0,2)) confEx.push(`- ${c.name} : « ${e.excerpt} »`);
+  }
+  for(const it of (m.agreementLikelyDet||[]).slice(0,2)) confEx.push(`- Accord probable : « ${it.evidence.excerpt} »`);
+  for(const it of (m.agreementLikelySubj||[]).slice(0,2)) confEx.push(`- Accord probable : « ${it.evidence.excerpt} »`);
+  if(confEx.length){
+    drills.push({
+      title:"Corrige ces 5 confusions / accords probables",
+      lines: confEx.slice(0,5)
+    });
+  }
+  if(gates?.noEndPunct){
+    const src = (m.sents||[]).slice(0,2).map(x=>`- ${String(x||"").replace(/[.!?…]+$/,'')}`);
+    drills.push({
+      title:"Réécris 2 phrases avec une fin correcte (. ! ?)",
+      lines: src.length ? src : ["- Réécris deux phrases du texte en ajoutant la ponctuation de fin."]
+    });
+  }
+  return drills.slice(0,2);
+}
+
 
 /* ========= Finale /20 + commentaires ========= */
 function buildFinal(m, p1, p2, level, raw){
@@ -1813,6 +1908,7 @@ function buildFinal(m, p1, p2, level, raw){
   const alerts = [];
   const {L, gates} = computeGates(m, level);
   const p3 = scorePass3(m, level, p1, p2);
+  const microDrills = buildMicroDrills(m, gates);
   const rubric50 = scoreRubric50(level, m, p1, p2, p3, {trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
   const calib50 = computeCalibrated50(level, rubric50.score50, gates);
 
@@ -1976,7 +2072,7 @@ Objectif mesurable :
   if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
   if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
 
-  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace};
+  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace, microDrills};
 
 }
 
@@ -2503,6 +2599,22 @@ Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • c
 Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée ${(fin.calib50?.score ?? fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 
   document.getElementById("contentProbe").textContent = probe;
+
+  const langueDetail = document.getElementById("langueDetail");
+  if(langueDetail){
+    const lines = [];
+    for(const c of (m.confusionHits||[])) for(const e of (c.evidence||[]).slice(0,2)) lines.push(`• ${c.name} (probable) — « ${e.excerpt} »`);
+    for(const a of (m.agreementLikelyDet||[]).slice(0,3)) lines.push(`• Accord probable (det+nom) — « ${a.evidence.excerpt} »`);
+    for(const a of (m.agreementLikelySubj||[]).slice(0,3)) lines.push(`• Accord probable (ils/elles + verbe) — « ${a.evidence.excerpt} »`);
+    if(m.tenseMixWarn?.active) lines.push("• Conjugaison probable : mélange de temps (hier + présent). ");
+    langueDetail.textContent = lines.slice(0,10).join("\n") || "Aucune alerte langue saillante.";
+  }
+
+  const drillsBox = document.getElementById("drillsBox");
+  if(drillsBox){
+    const drills = fin.microDrills || [];
+    drillsBox.textContent = drills.length ? drills.map(d=>`${d.title}\n${(d.lines||[]).join("\n")}`).join("\n\n") : "Pas d'exercice ciblé pour cette copie.";
+  }
 
   const d = m.dialogue || {};
   const dr = document.getElementById("dialogueReport");
