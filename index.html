@@ -277,6 +277,7 @@
             <select id="modeComment">
               <option value="prof" selected>Prof (détaillé)</option>
               <option value="eleve">Élève (simple)</option>
+              <option value="bulletin">Bulletin (30–40 mots)</option>
             </select>
           </div>
         </div>
@@ -363,8 +364,13 @@
 
       <h2>Commentaire généré</h2>
       <div class="out" id="comment">—</div>
+
+      <h2 style="margin-top:10px">Plan de réécriture (10 minutes)</h2>
+      <div class="out" id="rewritePlan">—</div>
+
       <div class="row" style="margin-top:10px">
         <button class="btn secondary" id="btnCopy">Copier</button>
+        <button class="btn secondary" id="btnCopyPlan">Copier plan</button>
         <button class="btn secondary" id="btnExportTxt">Exporter TXT</button>
         <button class="btn secondary" id="btnExportJson">Exporter JSON</button>
         <button class="btn secondary" id="btnExportCsv">Exporter CSV</button>
@@ -1901,6 +1907,47 @@ function buildMicroDrills(m, gates){
   return drills.slice(0,2);
 }
 
+function buildRewritePlan(fin){
+  const trace = [...(fin?.trace||[])].sort((a,b)=>a.delta-b.delta);
+  const out = [];
+  const used = new Set();
+  const nice = {langue:"Langue", narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style", temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence"};
+  const actions = {
+    langue:["Repère 3 fautes probables dans le texte.","Réécris les extraits en corrigeant seulement la forme.","Relis à voix haute et valide la ponctuation."],
+    narration:["Clarifie l'objectif du personnage.","Ajoute un obstacle concret.","Termine par une conséquence nette."],
+    description:["Ajoute 1 élément de lieu précis.","Ajoute 1 objet concret utile à l'action.","Ajoute 1 détail perturbant (trace/bruit/odeur)."],
+    dialogues:["Ajoute des tirets/guillemets cohérents.","Place une friction dans les 3 premières répliques.","Termine le dialogue par une décision claire."],
+    style:["Supprime 2 tics (genre/bref/du coup).","Raccourcis une phrase trop longue.","Termine un paragraphe sur une action."],
+    temps_lieu:["Ajoute un repère de temps explicite.","Ajoute un repère de lieu explicite.","Rends un déplacement lisible (verbe + préposition)."],
+    lexique:["Remplace 3 mots vagues par des mots précis.","Évite la répétition du mot dominant.","Ajoute 2 verbes d'action spécifiques."],
+    cohesion:["Remplace une répétition brute par une reprise.","Vérifie que chaque pronom renvoie à un nom clair.","Relie les phrases avec un connecteur utile."],
+    coherence:["Ajoute une cause avant une conséquence.","Vérifie la logique des actions.","Assure une fin compatible avec ce qui précède."]
+  };
+  for(const t of trace){
+    if((t.delta||0) >= 0) continue;
+    const module = categoryFromTraceItem(t);
+    if(used.has(module)) continue;
+    used.add(module);
+    const evidenceExcerpt = (t.evidence||[])[0]?.excerpt || "Extrait non disponible.";
+    out.push({
+      title: `${nice[module]||module} — priorité`,
+      why: `${t.message} Cette règle freine la note actuelle.`,
+      doNext: actions[module] || actions.langue,
+      evidenceExcerpt
+    });
+    if(out.length>=3) break;
+  }
+  if(!out.length){
+    out.push({
+      title:"Consolider les points forts",
+      why:"Aucun blocage majeur détecté dans la trace.",
+      doNext:["Garde la même structure narrative.","Ajoute un détail sensoriel non visuel.","Relis pour stabiliser la ponctuation."],
+      evidenceExcerpt:"Texte globalement cohérent."
+    });
+  }
+  return out;
+}
+
 
 /* ========= Finale /20 + commentaires ========= */
 function buildFinal(m, p1, p2, level, raw){
@@ -2041,6 +2088,12 @@ Ce qui est bien :
 
 Pour la prochaine fois :
 - ${objective}`;
+  } else if(mode === "bulletin"){
+    const rpLite = buildRewritePlan({trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
+    const pA = (rpLite[0]?.title || "priorité forme").replace(" — priorité","").toLowerCase();
+    const pB = (rpLite[1]?.title || "priorité récit").replace(" — priorité","").toLowerCase();
+    const fort = (f2[0] || "investissement régulier").toLowerCase();
+    comment = `${who}Copie ${level} sérieuse, avec ${fort}. Priorités immédiates : ${pA} puis ${pB}. En appliquant ces ajustements ciblés, la progression sera visible, plus stable et plus nette dès la prochaine rédaction évaluée.`;
   } else {
     comment =
 `${who}Niveau : ${level}
@@ -2072,7 +2125,9 @@ Objectif mesurable :
   if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
   if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
 
-  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace, microDrills};
+  const rewritePlan = buildRewritePlan({trace: mergedTrace, rubric50, gates, final});
+
+  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace, microDrills, rewritePlan};
 
 }
 
@@ -2616,6 +2671,12 @@ Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée $
     drillsBox.textContent = drills.length ? drills.map(d=>`${d.title}\n${(d.lines||[]).join("\n")}`).join("\n\n") : "Pas d'exercice ciblé pour cette copie.";
   }
 
+  const rpBox = document.getElementById("rewritePlan");
+  if(rpBox){
+    const rp = fin.rewritePlan || [];
+    rpBox.textContent = rp.length ? rp.map((p, i)=>`${i+1}. ${p.title}\nPourquoi : ${p.why}\nPreuve : « ${p.evidenceExcerpt} »\nÀ faire :\n- ${(p.doNext||[]).join("\n- ")}`).join("\n\n") : "—";
+  }
+
   const d = m.dialogue || {};
   const dr = document.getElementById("dialogueReport");
   if(dr){
@@ -2790,6 +2851,17 @@ bindEvt("btnCopy","click", async ()=>{
     setStatus("Commentaire copié.");
   } catch {
     setStatus("Copie impossible (permissions navigateur).");
+  }
+});
+
+bindEvt("btnCopyPlan","click", async ()=>{
+  const txt = document.getElementById("rewritePlan").textContent || "";
+  if(!txt || txt === "—") return;
+  try{
+    await navigator.clipboard.writeText(txt);
+    setStatus("Plan copié.");
+  } catch {
+    setStatus("Copie du plan impossible (permissions navigateur).");
   }
 });
 
