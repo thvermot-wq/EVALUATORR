@@ -106,6 +106,9 @@
     .twoCol{display:grid; grid-template-columns: 1fr 1fr; gap:10px}
     @media (max-width: 980px){ .twoCol{grid-template-columns:1fr} }
     .mini{font-size:11px; color:var(--muted)}
+    .rubric-table{width:100%; border-collapse:collapse; font-size:12px; margin-top:8px}
+    .rubric-table th,.rubric-table td{border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; vertical-align:top}
+    .rubric-table th:last-child,.rubric-table td:last-child{text-align:right}
 
 /* ===== Accueil Evaluator ===== */
 .home-hero{ padding: 18px 16px; }
@@ -150,6 +153,21 @@
   background: rgba(15,22,34,.75);
   color: var(--muted); font-size: 12px;
 }
+
+
+    .trace-item{display:block; width:100%; text-align:left; margin:6px 0; padding:8px; border:1px solid var(--line); border-radius:10px; background:rgba(15,22,34,.5); color:var(--text); cursor:pointer}
+    .trace-item:hover{border-color: rgba(106,169,255,.55)}
+    .trace-item .ev{display:block; color:var(--muted); font-size:11px; margin-top:4px}
+    .annotated{white-space:pre-wrap; line-height:1.45}
+    mark.hl{padding:0 .08em; border-radius:4px; color:var(--text)}
+    mark.hl-langue{background: rgba(255,92,92,.28)}
+    mark.hl-dialogues{background: rgba(106,169,255,.32)}
+    mark.hl-temps_lieu{background: rgba(255,204,102,.35)}
+    mark.hl-senses{background: rgba(46,204,113,.28)}
+    mark.hl-cohesion{background: rgba(209,128,255,.30)}
+    mark.hl-lexique{background: rgba(100,220,255,.30)}
+    mark.hl-style_tics{background: rgba(255,128,128,.34)}
+    mark.hl-focus{outline:2px solid #fff; box-shadow:0 0 0 2px rgba(106,169,255,.35)}
 
   </style>
 </head>
@@ -222,6 +240,7 @@
 
       <div class="row" style="margin-top:10px">
         <button class="btn" id="btnEval">Évaluer</button>
+        <button class="btn secondary" id="btnEvalAI">Évaluer + IA</button>
         <button class="btn secondary" id="btnExample">Exemple</button>
         <button class="btn danger" id="btnClear">Effacer</button>
         <span class="pill" id="status">Prêt.</span>
@@ -258,6 +277,7 @@
             <select id="modeComment">
               <option value="prof" selected>Prof (détaillé)</option>
               <option value="eleve">Élève (simple)</option>
+              <option value="bulletin">Bulletin (30–40 mots)</option>
             </select>
           </div>
         </div>
@@ -283,6 +303,24 @@
           </div>
           <span class="pill">v2 : seuils auto par niveau (modifiables dans le code)</span>
         </div>
+        <div class="row" style="margin-top:8px">
+          <div>
+            <label for="aiMode">Mode IA</label><br/>
+            <select id="aiMode">
+              <option value="OFF" selected>OFF</option>
+              <option value="AUTO">AUTO</option>
+              <option value="ONLINE">ONLINE</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiEndpoint">aiEndpoint (URL)</label><br/>
+            <input id="aiEndpoint" type="text" placeholder="https://.../evaluate" style="width:300px" />
+          </div>
+          <button class="btn secondary" id="btnTestAI" type="button">Tester endpoint</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="saveAIHistory" type="checkbox" /> Sauver la réponse IA dans l’historique
+          </label>
+        </div>
       </div>
 
       <div class="hr"></div>
@@ -301,12 +339,38 @@
         </div>
       </div>
 
+      <div class="box" style="margin-top:10px">
+        <div class="lab">Note /50 (barème collège)</div>
+        <div class="val" id="finalScore50">—</div>
+        <div class="bar"><div id="finalBar50"></div></div>
+        <div class="small" id="final50Hint">9 modules natifs (charte collège)</div>
+        <div class="row" style="margin-top:8px">
+          <label for="teacherScore50">Note prof finale (/50)</label>
+          <input id="teacherScore50" type="number" min="0" max="50" step="0.5" placeholder="ex: 31.5" style="width:120px" />
+          <button class="btn secondary" id="btnLearnCalibration" type="button">Apprendre (calibrer)</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="toggleCalibration" type="checkbox" checked /> Calibration ON/OFF
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme bon exemple</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="exampleAnonymize" type="checkbox" checked /> Anonymiser le texte
+          </label>
+        </div>
+      </div>
+
       <div class="hr"></div>
 
       <h2>Commentaire généré</h2>
       <div class="out" id="comment">—</div>
+
+      <h2 style="margin-top:10px">Plan de réécriture (10 minutes)</h2>
+      <div class="out" id="rewritePlan">—</div>
+
       <div class="row" style="margin-top:10px">
         <button class="btn secondary" id="btnCopy">Copier</button>
+        <button class="btn secondary" id="btnCopyPlan">Copier plan</button>
         <button class="btn secondary" id="btnExportTxt">Exporter TXT</button>
         <button class="btn secondary" id="btnExportJson">Exporter JSON</button>
         <button class="btn secondary" id="btnExportCsv">Exporter CSV</button>
@@ -351,8 +415,35 @@
 
       <div style="margin-top:10px">
         <details open>
+          <summary>Barème /50 (modules)</summary>
+          <table class="rubric-table" id="rubricTable">
+            <thead>
+              <tr><th>Module</th><th>Phrase clé</th><th>Score</th></tr>
+            </thead>
+            <tbody><tr><td colspan="3">—</td></tr></tbody>
+          </table>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
           <summary>Audit (détails des points)</summary>
           <ul class="list" id="auditList"></ul>
+        </details>
+      </div>
+      <div style="margin-top:10px">
+        <details>
+          <summary>Pourquoi cette note ?</summary>
+          <div class="out" id="traceBox">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Texte annoté</summary>
+          <div class="small" id="annotatedLegend">Catégories : langue, dialogues, temps/lieu, senses, cohesion, lexique, style-tics.</div>
+          <div class="out annotated" id="annotatedText">—</div>
+          <div class="small" id="annotatedMeta">—</div>
         </details>
       </div>
 
@@ -367,6 +458,42 @@
         <details>
           <summary>Indicateurs de contenu (Passe 2)</summary>
           <div class="out" id="contentProbe">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Langue : erreurs probables</summary>
+          <div class="out" id="langueDetail">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>À refaire (5 min)</summary>
+          <div class="out" id="drillsBox">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Rapport dialogues</summary>
+          <div class="out" id="dialogueReport">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details>
+          <summary>Diagnostic IA</summary>
+          <div class="out" id="aiDiag">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Exemples proches (bibliothèque prof)</summary>
+          <div class="out" id="nearExamples">—</div>
+          <div class="out" id="suggestedTips" style="margin-top:8px">—</div>
         </details>
       </div>
 
@@ -437,6 +564,106 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
 }
 function roundToHalf(x){ return Math.round(x*2)/2; }
+
+/** @typedef {{start:number,end:number,excerpt:string}} Evidence */
+/** @typedef {{module:string,ruleId:string,delta:number,message:string,evidence?:Evidence[]}} TraceItem */
+function mkEvidence(text, start=0, end=0, radius=70){
+  const t = String(text||"");
+  const a = clamp(start-radius, 0, Math.max(0, t.length-1));
+  const b = clamp((end||start)+radius, 0, t.length);
+  return {start, end, excerpt: t.slice(a,b).trim()};
+}
+function firstEvidence(text){
+  const t = String(text||"");
+  return [mkEvidence(t, 0, Math.min(t.length, 80))];
+}
+function traceItem(module, ruleId, delta, message, evidence=[]){
+  return {module, ruleId, delta:Number(delta.toFixed(2)), message, evidence};
+}
+function traceToAudit(trace){
+  return (trace||[]).map(t=>`${t.module}/${t.ruleId} ${t.delta>=0?"+":""}${t.delta.toFixed(2)} : ${t.message}`);
+}
+function normalizeHighlightCategory(moduleName){
+  const m = String(moduleName || "").toLowerCase();
+  if(m === "temps/lieu" || m === "temps_lieu") return "temps_lieu";
+  if(m === "style-tics" || m === "style_tics") return "style_tics";
+  return m;
+}
+function categoryFromTraceItem(t){
+  if(!t) return "langue";
+  if(t.ruleId.startsWith("confusion_") || ["ortho","syn","pseg","cap_no_end_punct"].includes(t.ruleId)) return "langue";
+  if(["scene","dialogue_count","dialogue_punct","dialogue_friction","dialogue_bascule","dialogue_sortie","dialogue_quotes_unbalanced","dialogue_missing_markers"].includes(t.ruleId)) return "dialogues";
+  if(["desc_trio","desc_trio_missing","desc_non_visual","desc_non_visual_low","desc_inventory"].includes(t.ruleId)) return "description";
+  if(["time_place_anchor","time_place_missing","time_place_moves"].includes(t.ruleId)) return "temps_lieu";
+  if(["gate_time_place","cap_time_place"].includes(t.ruleId)) return "temps_lieu";
+  if(["sens","gate_senses","cap_senses"].includes(t.ruleId)) return "senses";
+  if(["motifs","coh"].includes(t.ruleId)) return "cohesion";
+  if(["lex"].includes(t.ruleId)) return "lexique";
+  if(["ld","ending","disabled"].includes(t.ruleId)) return "style_tics";
+  if(t.module === "pass1") return "langue";
+  if(t.module === "pass2") return "cohesion";
+  return "style_tics";
+}
+function applyHighlights(raw, evidencesByModule){
+  const text = normalizeText(raw || "");
+  const ranges = [];
+  for(const [cat, list] of Object.entries(evidencesByModule || {})){
+    const c = normalizeHighlightCategory(cat);
+    for(const e of (list || [])){
+      const start = clamp(Number(e.start||0), 0, text.length);
+      const end = clamp(Number(e.end||start), start, text.length);
+      if(end <= start) continue;
+      ranges.push({start,end,category:c,traceIdx:e.traceIdx ?? null});
+    }
+  }
+  ranges.sort((a,b)=>a.start-b.start || a.end-b.end);
+  const totalOriginal = ranges.length;
+  const limited = ranges.slice(0, 80);
+  const points = new Set([0, text.length]);
+  for(const r of limited){ points.add(r.start); points.add(r.end); }
+  const cuts = Array.from(points).sort((a,b)=>a-b);
+  const segments = [];
+  for(let i=0;i<cuts.length-1;i++){
+    const a = cuts[i], b = cuts[i+1];
+    if(b<=a) continue;
+    const active = limited.filter(r => r.start < b && r.end > a);
+    if(!active.length){ segments.push({text:text.slice(a,b)}); continue; }
+    const counts = {};
+    for(const r of active) counts[r.category] = (counts[r.category]||0)+1;
+    const category = Object.entries(counts).sort((x,y)=>y[1]-x[1])[0][0];
+    const traceIdx = active.find(r=>Number.isInteger(r.traceIdx))?.traceIdx;
+    segments.push({text:text.slice(a,b), category, traceIdx});
+  }
+
+  let html = "";
+  let markN = 0;
+  const traceToMarkIds = {};
+  for(const seg of segments){
+    const chunk = escapeHtml(seg.text);
+    if(!seg.category){ html += chunk; continue; }
+    const markId = `hl-${markN++}`;
+    html += `<mark id="${markId}" class="hl hl-${seg.category}" data-category="${seg.category}">${chunk}</mark>`;
+    if(Number.isInteger(seg.traceIdx)){
+      if(!traceToMarkIds[seg.traceIdx]) traceToMarkIds[seg.traceIdx] = [];
+      traceToMarkIds[seg.traceIdx].push(markId);
+    }
+  }
+  return {
+    html: html || "—",
+    totalOriginal,
+    totalShown: limited.length,
+    omitted: Math.max(0, totalOriginal - limited.length),
+    traceToMarkIds
+  };
+}
+function scrollToHighlight(markId){
+  if(!markId) return;
+  const el = document.getElementById(markId);
+  if(!el) return;
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  el.classList.add("hl-focus");
+  setTimeout(()=>el.classList.remove("hl-focus"), 1400);
+}
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 function clamp01(x){ return clamp(x, 0, 1); }
 function mean(arr){ return arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : 0; }
@@ -453,6 +680,17 @@ function countOccurrences(textLower, phrase){
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp("\\b" + escaped + "\\b", "g");
   return (textLower.match(re) || []).length;
+}
+function findAllWithEvidence(text, re, limit=8){
+  const out = [];
+  const src = (re instanceof RegExp) ? new RegExp(re.source, re.flags.includes("g") ? re.flags : (re.flags + "g")) : re;
+  for(const m of String(text||"").matchAll(src)){
+    const start = m.index || 0;
+    const end = start + String(m[0]||"").length;
+    out.push(mkEvidence(text, start, end));
+    if(out.length >= limit) break;
+  }
+  return out;
 }
 function computeMATTR(filteredTokens, windowSize=50){
   if(filteredTokens.length===0) return 0;
@@ -535,6 +773,19 @@ const TIME_MARKERS = ["hier","demain","aujourd'hui","aujourd’hui","le lendemai
 const PLACE_MARKERS = ["dans la","dans le","dans un","au ","à la ","à l'","à l’","chez ","devant ","derrière ","près de","au fond","sur le","sous le","dans ma","dans mon"];
 const VAGUES = ["truc","chose","bizarre","chelou","trop","genre","machin","bidule","un peu","voilà","voila","bref"];
 const TICS = ["du coup","en fait","genre","bref","je sais pas","je ne sais pas","voilà","voila"];
+const TICS_ANTIGEN = [
+  {key:"rafale_pas", re:/\bpas\b[^.!?\n]{0,35}\bpas\b/gi, hint:"Rafale \"Pas… Pas…\" détectée."},
+  {key:"parce_que_cest_deja", re:/\bparce que c['’]est d[ée]j[àa]\b/gi, hint:"Tic \"parce que c'est déjà\"."},
+  {key:"juste_la_ou", re:/\bjuste\b[^.!?\n]{0,40}\bl[àa]\s+o[ùu]\b/gi, hint:"Construction \"juste..., là où...\" répétitive."},
+  {key:"nominal_double", re:/\b[a-zà-öø-ÿ]{2,}(?:\s+[a-zà-öø-ÿ]{2,}){0,2}\.?\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}(?:\s+[a-zà-öø-ÿ]{2,}){0,2}\./g, hint:"Phrases nominales d'effet en chaîne."},
+  {key:"para_like", re:/(?:^|\n\s*\n)\s*comme\b/gi, hint:"Paragraphe démarré par comparaison (\"Comme...\")."}
+];
+
+const DESC_STRUCTURE = ["au fond","au centre","à gauche","à droite","devant","derrière","au-dessus","au-dessous","sur la","sur le","dans le coin","aligné","rangé","empilé"];
+const DESC_INVENTAIRE = ["table","chaise","mur","sol","porte","fenêtre","étagère","boîte","sac","livre","lampe","écran","tiroir","couloir","placard","veste"];
+const DESC_DERANGEMENT = ["mais","pourtant","sauf que","soudain","cassé","renversé","fendu","trembl","brisé","tache","trace","disparu","manquait","anormal","désordre"];
+const NAMED_HINTS = ["m.","mme","monsieur","madame","nora","l[ée]a","adrien","mila","in[eè]s"];
+const CONSEQUENCE_MARKERS = ["donc","alors","du coup","par conséquent","de sorte que","si bien que","c'est pourquoi","c’est pourquoi"];
 
 const INTERNAL_POV = [
   "je pensais","je me suis dit","je me dis","je croyais","j'ai cru","j’ai cru","j'avais l'impression","j’avais l’impression",
@@ -556,6 +807,19 @@ const SENSES = {
   gout: ["goût","amer","acide","salé","sucré","mordre","langue"]
 };
 
+
+const SENSE_DETAIL = {
+  tactile: ["rugueux","lisse","collant","poisseux","sec","humide","mouillé","tiède","glacé","froid","chaud","brûlant","piquant","poussiéreux","doux","dur","mou","serré","pression","gratter","frisson","tremblement","main","peau","poignée","paume","doigts","érafler","tirer","frotter"],
+  olfactif: ["odeur","parfum","puanteur","moisi","fumée","âcre","rance","renfermé","essence","savon","javel","café","pain grillé","transpiration","humidite","poussière","métal","brûlé","odeur forte","ça sent","sentait","respirer","nez","narines","relent","air lourd","air froid","air chaud","fumet","parfume"],
+  sonore: ["bruit","silence","grincement","craquement","claquement","cliquetis","sifflement","bourdonnement","souffle","pas","voix","chuchotement","murmure","cri","sonnerie","porte qui claque","frapper","cogner","vibrer","écho","grésiller","respiration","toux","rire","pleurs","hurlement","grondement","tic-tac","frottement","raclement"],
+  thermique: ["froid","chaud","tiède","glacial","gelé","brûlant","bouillant","frisson","grelotter","sueur","transpirer","moite","courant d'air","air froid","air chaud","température","thermique","fraîcheur","chaleur","geler","réchauffer","chauffage","radiateur","buée","vent froid","vent chaud","peau froide","peau chaude","engourdi","picotement"]
+};
+const DESC_STRUCTURE_PLUS = ["porte","couloir","plafond","marche","mur","carrelage","fenêtre","escalier","palier","seuil","entrée","sortie","grille","portail","cour","classe","tableau","étagère","placard","tiroir","coin","angle","sol","dalle","rampe","colonne","toit","poutre","chambre","cuisine","salon","hall","vitrine","banc","quai","rue","trottoir","immeuble","cave","grenier"];
+const DESC_OBJET_PLUS = ["sac","chaise","table","cahier","veste","stylo","trousse","feuille","livre","classeur","gomme","règle","portable","clé","enveloppe","boîte","bouteille","gourde","lampe","chaussure","cartable","casquette","écharpe","gants","pull","manteau","badge","photo","billet","ticket","balai","seau","cadenas","télécommande","chargeur","masque","casier","agenda","compas","ciseaux"];
+const DESC_DERANGEMENT_PLUS = ["fissure","tache","bruit sec","odeur","trace","froid","chaleur","cassé","renversé","fendu","brisé","manquait","disparu","anormal","désordre","poussière","grincement","fuite","goutte","clignote","bloqué","coincé","déchiré","rayé","collant","humide","sombre","lumière éteinte","clé tordue","porte ouverte","porte forcée","papier froissé","marque","empreinte","boue","sang","alarme","silence bizarre","trou","verre cassé"];
+const MOVE_VERBS = ["aller","venir","entrer","sortir","monter","descendre","traverser","passer","courir","marcher","avancer","reculer","tourner","revenir","partir","s'approcher","s’éloigner","contourner","franchir","remonter","redescendre"];
+const MOVE_PREPS = ["vers","jusqu'à","jusqu’à","à travers","dans","hors de","depuis","jusque","sur","sous","entre","au fond","devant","derrière"];
+
 // Détection “orthographe / grammaire” fréquente (heuristiques)
 const APOS_BAD = [
   /\bj ai\b/g, /\bc est\b/g, /\bqu il\b/g, /\bqu elle\b/g, /\bj ai\b/g, /\bje suis pas\b/g
@@ -563,10 +827,20 @@ const APOS_BAD = [
 const CONFUSIONS = [
   {name:"a/à", re:/\b(a)\b\s+(aller|faire|prendre|mettre|voir|dire|manger|courir|venir|partir|rentrer)\b/g, hint:"Confusion possible a/à."},
   {name:"et/est", re:/\b(et)\b\s+(très|vraiment|content|fatigué|grand|petit|possible|impossible|bizarre|sombre)\b/g, hint:"Confusion possible et/est."},
-  {name:"sa/ça", re:/\bsa\b\s+(fait|va|m')/g, hint:"Confusion possible sa/ça."},
   {name:"ces/ses", re:/\bces\b\s+(trucs|affaires|parents|amis|idées)\b/g, hint:"Confusion possible ces/ses."},
-  {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."}
+  {name:"son/sont", re:/\bson\b\s+(arrivé|arrivés|venus|prêts|contents|fatigués)\b/g, hint:"Confusion possible son/sont."},
+  {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."},
+  {name:"sa/ça", re:/\bsa\b\s+(fait|va|m')/g, hint:"Confusion possible sa/ça."},
+  {name:"ce/se", re:/\bce\b\s+(sent|souvient|lève|leve|trompe|cache|voit)\b/g, hint:"Confusion possible ce/se."},
+  {name:"c'est/s'est", re:/\bc['’]est\b\s+(lavé|lavée|cassé|cassée|trompé|trompée|blessé|blessée)\b/g, hint:"Confusion possible c'est/s'est."},
+  {name:"leur/leurs", re:/\bleur\b\s+(yeux|mains|parents|affaires|amis|habits|chaussures)\b/g, hint:"Confusion possible leur/leurs."}
 ];
+
+const DIALOGUE_INCISORS = ["dit","demanda","souffla","répondit","murmura","cria","ajouta","lâcha","reprit","annonça"];
+const DIALOGUE_FRICTION_RE = /\b(non|mais|pourquoi|jamais|arrête|arrete|tu te fous|j['’]te)\b|\?/i;
+const DIALOGUE_BASCULE_RE = /\b(donc|alors|d['’]accord|ok|très bien|tres bien|j['’]y vais|on fait ça|on fait ca)\b/i;
+const DIALOGUE_SORTIE_RE = /\?|\b(partir|revenir|dire|prévenir|prevenir|jure|promets|vais\s+[a-zà-öø-ÿ]+)/i;
+
 
 // Seuils par niveau (v2 sévère)
 const LEVEL = {
@@ -604,6 +878,16 @@ const LEVEL = {
     idealAvgMin: 11, idealAvgMax: 19
   }
 };
+
+const GATE_CAPS_50 = {
+  noEndPunct: {cap50:24, reason:"Aucune ponctuation de fin de phrase"},
+  tooShort: {cap50ByLevel:{"5e":32,"4e":30,"3e":28}, reason:"Texte trop court"},
+  paragraphGate: {cap50:35, reason:"Segmentation insuffisante"},
+  sensesGate: {cap50:35, reason:"Sensoriel insuffisant"},
+  timePlaceGate: {cap50:35, reason:"Repères temps/lieu manquants"},
+  wallTextGate: {cap50:36, reason:"Mur de texte"}
+};
+
 
 /* ========= Metrics (v2.3 patched) ========= */
 function computeMetrics(raw){
@@ -686,10 +970,46 @@ function computeMetrics(raw){
 
   const confusionHits = [];
   for(const c of CONFUSIONS){
-    const n = (lower.match(c.re) || []).length;
-    if(n > 0) confusionHits.push({name:c.name, n, hint:c.hint});
+    const re = new RegExp(c.re.source, c.re.flags);
+    const matches = [];
+    for(const m0 of lower.matchAll(re)){
+      const start = m0.index || 0;
+      const end = start + String(m0[0] || "").length;
+      matches.push(mkEvidence(text, start, end));
+      if(matches.length >= 6) break;
+    }
+    const n = matches.length || (lower.match(c.re) || []).length;
+    if(n > 0) confusionHits.push({name:c.name, n, hint:c.hint, evidence: matches});
   }
   const confusionTotal = confusionHits.reduce((a,x)=>a+x.n,0);
+
+  const agreementLikelyDet = [];
+  for(const m0 of lower.matchAll(/\b(les|des|ces|mes|tes|ses|nos|vos|leurs)\s+([a-zà-öø-ÿ-]{3,})\b/gi)){
+    const w = (m0[2]||"").toLowerCase();
+    if(/(s|x|aux)$/.test(w)) continue;
+    const start = m0.index || 0;
+    const end = start + String(m0[0]||"").length;
+    agreementLikelyDet.push({rule:"det_pluriel", evidence: mkEvidence(text, start, end), token:w});
+    if(agreementLikelyDet.length >= 8) break;
+  }
+
+  const agreementLikelySubj = [];
+  for(const m0 of lower.matchAll(/\b(ils|elles)\s+(est|a|fait|va|dit)\b/gi)){
+    const start = m0.index || 0;
+    const end = start + String(m0[0]||"").length;
+    agreementLikelySubj.push({rule:"sujet_pluriel", evidence: mkEvidence(text, start, end), token:(m0[0]||"")});
+    if(agreementLikelySubj.length >= 8) break;
+  }
+
+  const hierHits = (lower.match(/\bhier\b/g)||[]).length;
+  const presentMatches = [...lower.matchAll(/\b(je|tu|il|elle|on|nous|vous|ils|elles)\s+[a-zà-öø-ÿ]{2,}(e|es|ons|ez|ent)\b/g)];
+  const presentCount = presentMatches.length;
+  const tenseMixWarn = {
+    active: (hierHits >= 1 && presentCount >= 4),
+    hierHits,
+    presentCount,
+    evidence: presentMatches.slice(0,3).map(m0=>mkEvidence(text, m0.index||0, (m0.index||0)+String(m0[0]||"").length))
+  };
 
   // Repères temps/lieu
   const timeHits = TIME_MARKERS.reduce((a,w)=>a+countOccurrences(lower, w), 0);
@@ -744,7 +1064,27 @@ function computeMetrics(raw){
     gout: SENSES.gout.reduce((a,w)=>a+countOccurrences(lower, w), 0),
   };
   const sensesCovered = Object.values(sensesHits).filter(v=>v>0).length;
-  const nonVisualCovered = [sensesHits.ouie, sensesHits.odorat, sensesHits.toucher, sensesHits.gout].filter(v=>v>0).length;
+  function collectWordHits(words, limit=3){
+    const hits = [];
+    let count = 0;
+    const seen = new Set();
+    for(const w of words){
+      const n = countOccurrences(lower, w);
+      count += n;
+      if(n>0 && hits.length < limit && !seen.has(w)){
+        const i = lower.indexOf(w);
+        if(i>=0){ hits.push(mkEvidence(text, i, i+w.length)); seen.add(w); }
+      }
+    }
+    return {count, hits};
+  }
+  const senseDetailHits = {
+    tactile: collectWordHits(SENSE_DETAIL.tactile, 3),
+    olfactif: collectWordHits(SENSE_DETAIL.olfactif, 3),
+    sonore: collectWordHits(SENSE_DETAIL.sonore, 3),
+    thermique: collectWordHits(SENSE_DETAIL.thermique, 3)
+  };
+  const nonVisualCovered = [senseDetailHits.olfactif.count, senseDetailHits.tactile.count, senseDetailHits.sonore.count].filter(v=>v>0).length;
 
   // Vague/tics
   const vagueCount = VAGUES.reduce((a,w)=>a+countOccurrences(lower, w), 0);
@@ -756,6 +1096,66 @@ function computeMetrics(raw){
   // Paragraphes / mur de texte
   const wallText = (paras.length === 1 && words >= 160);
 
+  // Dialogues (précision)
+  const dLines = text.split(/\n+/).map((line, idx)=>({line, idx})).filter(x=>x.line.trim());
+  const quoteFrEv = findAllWithEvidence(text, /«[^»\n]{1,220}»/g, 18);
+  const quoteStdEv = findAllWithEvidence(text, /"[^"\n]{1,220}"/g, 18);
+  const replByDash = dLines.filter(x=>/^\s*[—-]\s*[A-ZÀ-ÖØ-Ý]/.test(x.line));
+  const replByFr = dLines.filter(x=>/«[^»\n]{1,220}»/.test(x.line));
+  const replByStd = dLines.filter(x=>/"[^"\n]{1,220}"/.test(x.line));
+  const repSet = new Set([...replByDash, ...replByFr, ...replByStd].map(x=>x.idx));
+  const repIdx = Array.from(repSet).sort((a,b)=>a-b);
+  const replLines = repIdx.map(i=>dLines.find(x=>x.idx===i)?.line || "").filter(Boolean);
+  const nbRepliques = replLines.length;
+  const longestRep = replLines.reduce((mx,l)=>Math.max(mx, tokenize(l).length), 0);
+  const dialogueWords = replLines.reduce((a,l)=>a+tokenize(l).length,0);
+  const ratioDialogue = words ? dialogueWords / words : 0;
+  const nbIncises = dLines.reduce((a,x)=> a + DIALOGUE_INCISORS.reduce((k,v)=>k+countOccurrences(x.line.toLowerCase(), v),0), 0);
+
+  const dashStarts = dLines.filter(x=>/^\s*[—-]\s*/.test(x.line));
+  const dashMajOk = dashStarts.filter(x=>/^\s*[—-]\s*[A-ZÀ-ÖØ-Ý]/.test(x.line)).length;
+  const dashMajRatio = dashStarts.length ? dashMajOk / dashStarts.length : 1;
+  const inciseOk = dLines.filter(x=>/[",]\s*(dit|demanda|souffla|répondit|murmura|cria|ajouta|lâcha|reprit|annonça)\b/i.test(x.line)).length;
+  const inciseRatio = nbIncises ? clamp01(inciseOk / nbIncises) : 1;
+  const frOpen = (text.match(/«/g)||[]).length;
+  const frClose = (text.match(/»/g)||[]).length;
+  const stdQuotes = (text.match(/"/g)||[]).length;
+  const quoteBalanced = (frOpen===frClose) && (stdQuotes%2===0);
+
+  const firstThreeRep = replLines.slice(0,3).join(" ").toLowerCase();
+  const friction = DIALOGUE_FRICTION_RE.test(firstThreeRep);
+  const afterFriction = friction ? replLines.slice(1).join(" ").toLowerCase() : "";
+  const bascule = friction && DIALOGUE_BASCULE_RE.test(afterFriction);
+  const lastRep = (replLines[replLines.length-1] || "").toLowerCase();
+  const sortie = DIALOGUE_SORTIE_RE.test(lastRep);
+
+  const dialogueEvidence = {
+    replByDash: replByDash.slice(0,8).map(x=>mkEvidence(text, text.indexOf(x.line), text.indexOf(x.line)+x.line.length)),
+    replByFr: quoteFrEv,
+    replByStd: quoteStdEv,
+    friction: friction ? quoteFrEv.slice(0,1).concat(quoteStdEv.slice(0,1)).concat(replByDash.slice(0,1).map(x=>mkEvidence(text, text.indexOf(x.line), text.indexOf(x.line)+x.line.length))).slice(0,1) : [],
+    bascule: bascule ? findAllWithEvidence(text, DIALOGUE_BASCULE_RE, 2) : [],
+    sortie: sortie && replLines.length ? [mkEvidence(text, Math.max(0, text.lastIndexOf(replLines[replLines.length-1])), Math.max(0, text.lastIndexOf(replLines[replLines.length-1])) + replLines[replLines.length-1].length)] : [],
+    quoteIssue: quoteBalanced ? [] : firstEvidence(text)
+  };
+
+  const dialogue = {
+    nbRepliques, longestRep, ratioDialogue, nbIncises,
+    dashMajRatio, inciseRatio, quoteBalanced,
+    friction, bascule, sortie,
+    evidence: dialogueEvidence
+  };
+
+  const descStructure = collectWordHits(DESC_STRUCTURE_PLUS, 3);
+  const descObjet = collectWordHits(DESC_OBJET_PLUS, 3);
+  const descDerangement = collectWordHits(DESC_DERANGEMENT_PLUS, 3);
+  const descTrioCovered = (descStructure.count >= 1 && descObjet.count >= 1 && descDerangement.count >= 1);
+  const nounGuess = (text.match(/\b[a-zà-öø-ÿ]{3,}(tion|age|ure|oir|eur|euse|ment|té|ette|ier|ière|isme|ence|ance)\b/gi) || []).length + (descStructure.count + descObjet.count);
+  const verbGuess = (text.match(/\b[a-zà-öø-ÿ]{3,}(er|ir|re|ez|ons|ent|ait|aient|é|ée|és|ées)\b/gi) || []).length;
+  const moveVerbEv = findAllWithEvidence(text, /\b(all|vien|entr|sort|mont|descend|travers|pass|cour|march|avanc|recul|tourn|reven|part|approch|éloign|contourn|franch|remont|redescend)[a-zà-öø-ÿ]*\b/gi, 3);
+  const moveVerbHits = {count: moveVerbEv.length, hits: moveVerbEv};
+  const movePrepHits = collectWordHits(MOVE_PREPS, 3);
+
   return {
     text, lower, paras, sents, tokens, words,
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
@@ -763,7 +1163,30 @@ function computeMetrics(raw){
     longThr, longVeryThr, longSentences, veryLongSentences,
     filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
+    offsetMap: {kind:"normalized_identity", length:text.length},
+    agreementLikelyDet, agreementLikelySubj, tenseMixWarn,
     timeHits, placeHits, connCount, turnsCount, actionPairs,
+    dialogue,
+    desc: {
+      structure: descStructure,
+      objet: descObjet,
+      derangement: descDerangement,
+      trioCovered: descTrioCovered,
+      verbNounRatio: nounGuess ? (verbGuess / nounGuess) : 0,
+      nonVisualCoreCovered: nonVisualCovered,
+      evidence: {
+        structure: descStructure.hits,
+        objet: descObjet.hits,
+        derangement: descDerangement.hits,
+        nonVisual: [...senseDetailHits.olfactif.hits, ...senseDetailHits.tactile.hits, ...senseDetailHits.sonore.hits].slice(0,3)
+      }
+    },
+    movement: {
+      verbs: moveVerbHits,
+      preps: movePrepHits,
+      readableMoves: (moveVerbHits.count >= 1 && movePrepHits.count >= 1),
+      evidence: [...moveVerbHits.hits, ...movePrepHits.hits].slice(0,3)
+    },
     internalHits, povBias, jeCount, ilCount,
     lightHits, sensesHits, sensesCovered, nonVisualCovered,
     vagueCount, ticsCount, wallText
@@ -806,6 +1229,7 @@ function computeGates(m, level){
    - Lexique (2.5)
 */
 function scorePass1(m, level){
+  const trace = [];
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
@@ -934,6 +1358,23 @@ function scorePass1(m, level){
     alerts.push({lvl:"warn", t:`Confusions : ${m.confusionHits.map(x=>`${x.name}(${x.n})`).join(", ")}`});
   }
 
+  const agDetN = (m.agreementLikelyDet||[]).length;
+  const agSubjN = (m.agreementLikelySubj||[]).length;
+  const agN = agDetN + agSubjN;
+  if(agN > 0){
+    const pen = Math.min(0.7, 0.12 * agN);
+    ortho -= pen;
+    audit.push(`ORTHO (-) : accords probables à vérifier (${agN}) (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:`Accords probables : ${agN} occurrence(s) à contrôler.`});
+  }
+
+  if(m.tenseMixWarn?.active){
+    const pen = 0.2;
+    ortho -= pen;
+    audit.push(`ORTHO (~) : mélange de temps probable ("hier" + présent fréquent) (-${pen.toFixed(2)}).`);
+    alerts.push({lvl:"warn", t:"Conjugaison : mélange de temps probable (passé/présent)."});
+  }
+
   ortho = clamp(ortho, 0, 2.5);
 
   // 4) Lexique /2.5
@@ -983,16 +1424,35 @@ function scorePass1(m, level){
 
   // pénalité “trop court”
   if(gates.tooShort){
+    const before = pass1;
     pass1 = Math.min(pass1, 4.5);
     audit.push(`PASS1 cap : texte trop court (<${L.minWords} mots) ⇒ Passe 1 ≤ 4,5/10.`);
+    trace.push(traceItem("pass1","cap_too_short", pass1-before, `Plafond passe1 texte court (${L.minWords} mots).`, firstEvidence(m.text)));
   }
   // pénalité “pas de ponctuation”
   if(gates.noEndPunct){
+    const before = pass1;
     pass1 = Math.min(pass1, 3.5);
     audit.push("PASS1 cap : aucune fin de phrase (.!?) ⇒ Passe 1 ≤ 3,5/10.");
+    trace.push(traceItem("pass1","cap_no_end_punct", pass1-before, "Plafond passe1 sans ponctuation de fin.", firstEvidence(m.text)));
   }
 
-  return {score: roundToHalf(clamp(pass1, 0, 10)), audit, alerts, parts:{pseg, syn, ortho, lex}, gates};
+  trace.push(traceItem("pass1","pseg", pseg, "Ponctuation & segmentation."));
+  trace.push(traceItem("pass1","syn", syn, "Syntaxe et rythme."));
+  trace.push(traceItem("pass1","ortho", ortho, "Orthographe / grammaire."));
+  trace.push(traceItem("pass1","lex", lex, "Lexique / répétitions / tics."));
+  for(const c of (m.confusionHits||[])){
+    trace.push(traceItem("pass1", `confusion_${c.name}`, -0.1*c.n, `${c.name} détecté (${c.n}).`, (c.evidence && c.evidence.length) ? c.evidence : firstEvidence(m.text)));
+  }
+  if((m.agreementLikelyDet||[]).length + (m.agreementLikelySubj||[]).length){
+    const ev = [...(m.agreementLikelyDet||[]).map(x=>x.evidence), ...(m.agreementLikelySubj||[]).map(x=>x.evidence)].slice(0,4);
+    trace.push(traceItem("pass1", "accords_probables", -0.1*ev.length, "Accords probables (heuristique).", ev));
+  }
+  if(m.tenseMixWarn?.active){
+    trace.push(traceItem("pass1", "temps_mix_probable", -0.2, "Mélange de temps probable (heuristique).", m.tenseMixWarn.evidence || firstEvidence(m.text)));
+  }
+
+  return {score: roundToHalf(clamp(pass1, 0, 10)), audit: traceToAudit(trace), alerts, parts:{pseg, syn, ortho, lex}, gates, trace};
 }
 
 /* ========= PASS 2 : “subjectif mais nécessaire” /10 (v2 sévère) =========
@@ -1005,6 +1465,7 @@ function scorePass1(m, level){
    - Intérêt (1.5) via tournants + choix + actions
 */
 function scorePass2(m, level){
+  const trace = [];
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
@@ -1141,7 +1602,16 @@ function scorePass2(m, level){
     audit.push("PASS2 cap : sensoriel insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
 
-  return {score: roundToHalf(clamp(pass2, 0, 10)), audit, alerts, parts:{theme, coh, pov, ld, sens, interest}, gates};
+  trace.push(traceItem("pass2","theme", theme, "Tenue des thèmes."));
+  trace.push(traceItem("pass2","coh", coh, "Cohérence récit."));
+  trace.push(traceItem("pass2","pov", pov, "Point de vue interne."));
+  trace.push(traceItem("pass2","ld", ld, "Lumière/ombre."));
+  trace.push(traceItem("pass2","sens", sens, "5 sens et non-visuels."));
+  trace.push(traceItem("pass2","interest", interest, "Intérêt narratif."));
+  if(gates.timePlaceGate) trace.push(traceItem("pass2","gate_time_place", -0.5, "Repères temps/lieu insuffisants.", firstEvidence(m.text)));
+  if(gates.sensesGate) trace.push(traceItem("pass2","gate_senses", -0.5, "Sensoriel insuffisant.", firstEvidence(m.text)));
+  if(gates.tooShort) trace.push(traceItem("pass2","gate_too_short", -0.5, "Texte trop court.", firstEvidence(m.text)));
+  return {score: roundToHalf(clamp(pass2, 0, 10)), audit: traceToAudit(trace), alerts, parts:{theme, coh, pov, ld, sens, interest}, gates, trace};
 }
 
 /* ========= PASS 3 : Excellence /3 (bonus haut niveau) =========
@@ -1151,6 +1621,7 @@ function scorePass2(m, level){
    - Scène (actions + perceptions + réactions) (1.0)
 */
 function scorePass3(m, level, p1, p2){
+  const trace = [];
   const audit = [];
   const alerts = [];
 
@@ -1159,7 +1630,8 @@ function scorePass3(m, level, p1, p2){
 
   if(!formOK){
     audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
-    return {score: 0, audit, alerts, parts:{ending:0, motifs:0, scene:0}};
+    trace.push(traceItem("pass3","disabled",0,"Excellence désactivée (forme insuffisante).", firstEvidence(m.text)));
+    return {score: 0, audit: traceToAudit(trace), alerts, parts:{ending:0, motifs:0, scene:0}, trace};
   }
 
   // --- 1) Fin maîtrisée /1
@@ -1233,7 +1705,10 @@ function scorePass3(m, level, p1, p2){
   audit.push(`EXC-SCÈNE (${scene.toFixed(1)}/1) : actions=${ap}, non-visuels=${senseNV}, POV=${pov}.`);
 
   const score = roundToHalf(ending + motifs + scene); // /3
-  return {score, audit, alerts, parts:{ending, motifs, scene}};
+  trace.push(traceItem("pass3","ending", ending, "Fin maîtrisée."));
+  trace.push(traceItem("pass3","motifs", motifs, "Motifs tenus."));
+  trace.push(traceItem("pass3","scene", scene, "Scène (actions+perceptions)."));
+  return {score, audit: traceToAudit(trace), alerts, parts:{ending, motifs, scene}, trace};
 }
 
 // petit helper : découper le texte en tiers
@@ -1249,12 +1724,240 @@ function splitThirds(lower){
 }
 
 
+function parseDialogueInfo(raw, m){
+  if(m?.dialogue){
+    const d = m.dialogue;
+    const punctRatio = (d.dashMajRatio + d.inciseRatio + (d.quoteBalanced?1:0)) / 3;
+    return {count:d.nbRepliques, punctRatio, friction:d.friction, bascule:d.bascule, sortie:d.sortie, ratioDialogue:d.ratioDialogue, longestRep:d.longestRep, quoteBalanced:d.quoteBalanced, evidence:d.evidence||{}};
+  }
+  const text = raw || "";
+  const lines = text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const repl = [];
+  for(const l of lines){
+    if(/^[-—]\s*/.test(l) || /^["«]/.test(l) || /["»]$/.test(l)) repl.push(l);
+  }
+  const firstThree = repl.slice(0,3).join(" ").toLowerCase();
+  const friction = DIALOGUE_FRICTION_RE.test(firstThree);
+  const punctGood = repl.filter(l=>/[.!?…"]\s*$/.test(l)).length;
+  const punctRatio = repl.length ? (punctGood/repl.length) : 0;
+  const last = (repl[repl.length-1] || "").toLowerCase();
+  const bascule = friction && DIALOGUE_BASCULE_RE.test(repl.slice(1).join(" ").toLowerCase());
+  const sortie = DIALOGUE_SORTIE_RE.test(last);
+  return {count: repl.length, punctRatio, friction, bascule, sortie, ratioDialogue:0, longestRep:0, quoteBalanced:true, evidence:{}};
+}
+
+
+function scoreRubric50(level, m, p1, p2, p3, fin){
+  const {gates} = computeGates(m, level);
+  const trace = fin?.trace || [...(p1?.trace||[]), ...(p2?.trace||[]), ...(p3?.trace||[])];
+
+  const weights = {
+    langue:15, narration:6, description:6, dialogues:5, style:5,
+    temps_lieu:4, lexique:4, cohesion:3, coherence:2
+  };
+
+  const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[]}]));
+
+  function add(module, traceItemObj, gain){
+    if(!modules[module]) return;
+    modules[module].score += gain;
+    modules[module].traceIds.push(traceItemObj.ruleId);
+  }
+
+  for(const t of trace){
+    if(t.module === "pass1"){
+      if(t.ruleId === "pseg") add("langue", t, (t.delta/3)*5);
+      if(t.ruleId === "syn") add("langue", t, (t.delta/2)*4);
+      if(t.ruleId === "ortho") add("langue", t, (t.delta/2.5)*4);
+      if(t.ruleId === "lex") add("lexique", t, (t.delta/2.5)*4);
+      if(t.ruleId.startsWith("confusion_")) add("langue", t, t.delta*0.25);
+    }
+    if(t.module === "pass2"){
+      if(t.ruleId === "theme") add("narration", t, (t.delta/1.5)*2.5);
+      if(t.ruleId === "coh") add("coherence", t, (t.delta/2.5)*2);
+      if(t.ruleId === "pov") add("narration", t, (t.delta/1.5)*1.5);
+      if(t.ruleId === "ld") add("style", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "sens") add("description", t, (t.delta/2.0)*3.5);
+      if(t.ruleId === "interest") add("narration", t, (t.delta/1.5)*2);
+      if(t.ruleId === "gate_time_place") add("temps_lieu", t, -1.2);
+      if(t.ruleId === "gate_senses") add("description", t, -1.2);
+    }
+    if(t.module === "pass3"){
+      if(t.ruleId === "ending") add("style", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "motifs") add("cohesion", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "scene") add("dialogues", t, (t.delta/1.0)*2.5);
+      if(t.ruleId === "disabled") add("style", t, -0.5);
+    }
+  }
+
+  const dialogueInfo = parseDialogueInfo(m.text, m);
+  const dialogueTrace = [];
+  let dialogueGain = 0;
+  if(dialogueInfo.count >= 2){ dialogueGain += 1.5; dialogueTrace.push(traceItem("rubric50","dialogue_count", +1.5, `Dialogues présents (${dialogueInfo.count} répliques).`, (dialogueInfo.evidence?.replByDash||[]).concat(dialogueInfo.evidence?.replByFr||[]).concat(dialogueInfo.evidence?.replByStd||[]).slice(0,2))); }
+  else if((m.dialogue?.nbIncises || 0) >= 1){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_missing_markers", -0.8, "Dialogue probable sans marquage clair (tirets/guillemets).", firstEvidence(m.text))); }
+  if(dialogueInfo.punctRatio >= 0.66){ dialogueGain += 1.0; dialogueTrace.push(traceItem("rubric50","dialogue_punct", +1.0, "Ponctuation dialoguée globalement saine.")); }
+  else if(dialogueInfo.count >= 2){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_punct", -0.8, "Ponctuation/dialogues fragiles (tirets/majuscules/incises/guillemets).", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
+  if(dialogueInfo.friction){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_friction", +0.8, "Friction détectée tôt dans l'échange.", dialogueInfo.evidence?.friction||[])); }
+  if(dialogueInfo.bascule){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_bascule", +0.8, "Bascule dialoguée détectée.", dialogueInfo.evidence?.bascule||[])); }
+  if(dialogueInfo.sortie){ dialogueGain += 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_sortie", +0.9, "Sortie de dialogue avec décision/tension.", dialogueInfo.evidence?.sortie||[])); }
+  if(!dialogueInfo.quoteBalanced){ dialogueGain -= 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.9, "Guillemets non équilibrés.", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
+  dialogueGain = clamp(dialogueGain, 0, 5);
+  modules.dialogues.score += dialogueGain;
+  modules.dialogues.traceIds.push(...dialogueTrace.map(x=>x.ruleId));
+
+  const descTrace = [];
+  let descGain = 0;
+  if(m.desc?.trioCovered){
+    descGain += 2.2;
+    descTrace.push(traceItem("rubric50","desc_trio", +2.2, "Description ancrée : structure + objet + dérangement présents.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,3)));
+  } else {
+    descGain -= 1.0;
+    descTrace.push(traceItem("rubric50","desc_trio_missing", -1.0, "Description incomplète : trio structure/objet/dérangement non couvert.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,2)));
+  }
+  if((m.desc?.nonVisualCoreCovered || 0) >= 2){
+    descGain += 1.8;
+    descTrace.push(traceItem("rubric50","desc_non_visual", +1.8, "Sens non-visuels bien mobilisés (olfactif/tactile/sonore).", m.desc?.evidence?.nonVisual || []));
+  } else {
+    descGain -= 0.8;
+    descTrace.push(traceItem("rubric50","desc_non_visual_low", -0.8, "Sens non-visuels insuffisants pour ancrer la scène.", m.desc?.evidence?.nonVisual || firstEvidence(m.text)));
+  }
+  if((m.desc?.verbNounRatio || 0) < 0.55){
+    descGain -= 0.9;
+    descTrace.push(traceItem("rubric50","desc_inventory", -0.9, "Description trop en inventaire (noms >> verbes d'action).", [...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.structure||[])].slice(0,2)));
+  } else {
+    descGain += 0.6;
+  }
+  modules.description.score += clamp(descGain, 0, 6);
+  modules.description.traceIds.push(...descTrace.map(x=>x.ruleId));
+
+  const tlTrace = [];
+  let tlGain = 0;
+  if(m.timeHits>=1 && m.placeHits>=1){
+    tlGain += 2.4;
+    tlTrace.push(traceItem("rubric50","time_place_anchor", +2.4, "Ancrages temps et lieu détectés.", firstEvidence(m.text)));
+  } else {
+    tlGain -= 1.2;
+    tlTrace.push(traceItem("rubric50","time_place_missing", -1.2, "Temps ou lieu manquant : narration dans le vide.", firstEvidence(m.text)));
+  }
+  if(m.movement?.readableMoves){
+    tlGain += 1.2;
+    tlTrace.push(traceItem("rubric50","time_place_moves", +1.2, "Déplacements lisibles (prépositions + verbes de mouvement).", m.movement?.evidence || []));
+  } else {
+    tlGain -= 0.6;
+  }
+  modules.temps_lieu.score += clamp(tlGain, 0, 4);
+  modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
+
+  // métriques d'appoint pour modules peu couverts
+  modules.cohesion.score += clamp((m.repeatsNear.length===0?1.0:0.3)+(m.top3Share<=0.34?1.0:0.4),0,3);
+
+  for(const v of Object.values(modules)){
+    v.score = roundToHalf(clamp(v.score, 0, v.max));
+  }
+
+  let score50 = roundToHalf(Object.values(modules).reduce((a,x)=>a+x.score,0));
+  const caps50 = [];
+  for(const [gate,conf] of Object.entries(GATE_CAPS_50)){
+    if(!gates?.[gate]) continue;
+    const cap50 = conf.cap50ByLevel ? conf.cap50ByLevel[level] : conf.cap50;
+    caps50.push({gate, cap50, reason: conf.reason});
+    score50 = Math.min(score50, cap50);
+  }
+
+  const notes = [
+    `Trace utilisée: ${trace.length} items`,
+    `Gates actives: ${Object.keys(gates).filter(k=>gates[k]).join(', ') || 'aucune'}`
+  ];
+
+  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes, trace: [...dialogueTrace, ...descTrace, ...tlTrace]};
+}
+
+
+
+
+function diagnoseRubricModule(moduleName, moduleState, trace){
+  const ids = moduleState?.traceIds || [];
+  const picked = ids.map(id => (trace||[]).find(t=>t.ruleId===id)).find(Boolean);
+  if(picked?.message) return picked.message;
+  if((moduleState?.score ?? 0) >= ((moduleState?.max ?? 0) * 0.6)) return "Plutôt solide.";
+  return "À renforcer.";
+}
+
+function buildMicroDrills(m, gates){
+  const drills = [];
+  const confEx = [];
+  for(const c of (m.confusionHits||[])){
+    for(const e of (c.evidence||[]).slice(0,2)) confEx.push(`- ${c.name} : « ${e.excerpt} »`);
+  }
+  for(const it of (m.agreementLikelyDet||[]).slice(0,2)) confEx.push(`- Accord probable : « ${it.evidence.excerpt} »`);
+  for(const it of (m.agreementLikelySubj||[]).slice(0,2)) confEx.push(`- Accord probable : « ${it.evidence.excerpt} »`);
+  if(confEx.length){
+    drills.push({
+      title:"Corrige ces 5 confusions / accords probables",
+      lines: confEx.slice(0,5)
+    });
+  }
+  if(gates?.noEndPunct){
+    const src = (m.sents||[]).slice(0,2).map(x=>`- ${String(x||"").replace(/[.!?…]+$/,'')}`);
+    drills.push({
+      title:"Réécris 2 phrases avec une fin correcte (. ! ?)",
+      lines: src.length ? src : ["- Réécris deux phrases du texte en ajoutant la ponctuation de fin."]
+    });
+  }
+  return drills.slice(0,2);
+}
+
+function buildRewritePlan(fin){
+  const trace = [...(fin?.trace||[])].sort((a,b)=>a.delta-b.delta);
+  const out = [];
+  const used = new Set();
+  const nice = {langue:"Langue", narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style", temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence"};
+  const actions = {
+    langue:["Repère 3 fautes probables dans le texte.","Réécris les extraits en corrigeant seulement la forme.","Relis à voix haute et valide la ponctuation."],
+    narration:["Clarifie l'objectif du personnage.","Ajoute un obstacle concret.","Termine par une conséquence nette."],
+    description:["Ajoute 1 élément de lieu précis.","Ajoute 1 objet concret utile à l'action.","Ajoute 1 détail perturbant (trace/bruit/odeur)."],
+    dialogues:["Ajoute des tirets/guillemets cohérents.","Place une friction dans les 3 premières répliques.","Termine le dialogue par une décision claire."],
+    style:["Supprime 2 tics (genre/bref/du coup).","Raccourcis une phrase trop longue.","Termine un paragraphe sur une action."],
+    temps_lieu:["Ajoute un repère de temps explicite.","Ajoute un repère de lieu explicite.","Rends un déplacement lisible (verbe + préposition)."],
+    lexique:["Remplace 3 mots vagues par des mots précis.","Évite la répétition du mot dominant.","Ajoute 2 verbes d'action spécifiques."],
+    cohesion:["Remplace une répétition brute par une reprise.","Vérifie que chaque pronom renvoie à un nom clair.","Relie les phrases avec un connecteur utile."],
+    coherence:["Ajoute une cause avant une conséquence.","Vérifie la logique des actions.","Assure une fin compatible avec ce qui précède."]
+  };
+  for(const t of trace){
+    if((t.delta||0) >= 0) continue;
+    const module = categoryFromTraceItem(t);
+    if(used.has(module)) continue;
+    used.add(module);
+    const evidenceExcerpt = (t.evidence||[])[0]?.excerpt || "Extrait non disponible.";
+    out.push({
+      title: `${nice[module]||module} — priorité`,
+      why: `${t.message} Cette règle freine la note actuelle.`,
+      doNext: actions[module] || actions.langue,
+      evidenceExcerpt
+    });
+    if(out.length>=3) break;
+  }
+  if(!out.length){
+    out.push({
+      title:"Consolider les points forts",
+      why:"Aucun blocage majeur détecté dans la trace.",
+      doNext:["Garde la même structure narrative.","Ajoute un détail sensoriel non visuel.","Relis pour stabiliser la ponctuation."],
+      evidenceExcerpt:"Texte globalement cohérent."
+    });
+  }
+  return out;
+}
+
+
 /* ========= Finale /20 + commentaires ========= */
-function buildFinal(m, p1, p2, level){
+function buildFinal(m, p1, p2, level, raw){
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
   const p3 = scorePass3(m, level, p1, p2);
+  const microDrills = buildMicroDrills(m, gates);
+  const rubric50 = scoreRubric50(level, m, p1, p2, p3, {trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
+  const calib50 = computeCalibrated50(level, rubric50.score50, gates);
 
   audit.push("— Passe 1 (forme) —");
   audit.push(...p1.audit);
@@ -1262,7 +1965,16 @@ function buildFinal(m, p1, p2, level){
   audit.push(...p2.audit);
   audit.push("— Passe 3 (excellence) —");
   audit.push(...p3.audit);
+  audit.push("— Barème /50 (modules) —");
+  for(const [k,v] of Object.entries(rubric50.modules)){
+    audit.push(`${k}: ${v.score}/${v.max} — ${diagnoseRubricModule(k, v, [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])])}`);
+  }
+  for(const c of (rubric50.caps50||[])){ audit.push(`Plafond /50 : ${c.reason} ⇒ ≤ ${c.cap50}/50.`); }
+  audit.push(`Calibration /50 : ${calib50.enabled?"ON":"OFF"} (deltaMean=${calib50.deltaMean>=0?"+":""}${calib50.deltaMean.toFixed(2)}, n=${calib50.n}) => ${calib50.score.toFixed(1)}/50.`);
   alerts.push(...p1.alerts, ...p2.alerts);
+  for(const mod of Object.values(rubric50.modules)){
+    for(const a of (mod.alerts||[])) alerts.push({lvl:"warn", t:`/50 ${a}`});
+  }
 
   // Poids : v2 recommande un ajustement par niveau (on écrase légèrement l’UI si incohérent)
   let w1 = Number(document.getElementById("w1").value || 0.55);
@@ -1276,7 +1988,7 @@ function buildFinal(m, p1, p2, level){
 
   // Score pondéré /20
   let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
-
+  const score20_raw = final;
 
   // Hard gates (plafonds)
   if(gates.noEndPunct){
@@ -1300,6 +2012,14 @@ function buildFinal(m, p1, p2, level){
     final = Math.min(final, 14.0);
     audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
   }
+
+  if((m.dialogue?.nbRepliques || 0) >= 3 && (m.dialogue?.dashMajRatio || 0) >= 0.75 && p1.parts.pseg < 2.0){
+    const before = final;
+    final = Math.min(20, roundToHalf(final + 0.5));
+    if(final > before) audit.push("Ajustement dialogue : segmentation dialoguée saine, malus langue atténué (+0,5). ");
+  }
+
+  const score20_capped = final;
 
   // Verdict
   let verdict = "";
@@ -1368,6 +2088,12 @@ Ce qui est bien :
 
 Pour la prochaine fois :
 - ${objective}`;
+  } else if(mode === "bulletin"){
+    const rpLite = buildRewritePlan({trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
+    const pA = (rpLite[0]?.title || "priorité forme").replace(" — priorité","").toLowerCase();
+    const pB = (rpLite[1]?.title || "priorité récit").replace(" — priorité","").toLowerCase();
+    const fort = (f2[0] || "investissement régulier").toLowerCase();
+    comment = `${who}Copie ${level} sérieuse, avec ${fort}. Priorités immédiates : ${pA} puis ${pB}. En appliquant ces ajustements ciblés, la progression sera visible, plus stable et plus nette dès la prochaine rédaction évaluée.`;
   } else {
     comment =
 `${who}Niveau : ${level}
@@ -1393,9 +2119,302 @@ Objectif mesurable :
     return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
   }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
 
-  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3};
+  const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[]), ...(rubric50.trace||[])];
+  if(gates.noEndPunct) mergedTrace.push(traceItem("final","cap_no_end_punct", 0, "Plafond final noEndPunct.", firstEvidence(m.text)));
+  if(gates.tooShort) mergedTrace.push(traceItem("final","cap_too_short", 0, "Plafond final tooShort.", firstEvidence(m.text)));
+  if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
+  if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
+
+  const rewritePlan = buildRewritePlan({trace: mergedTrace, rubric50, gates, final});
+
+  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace, microDrills, rewritePlan};
 
 }
+
+
+const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
+const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
+const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
+
+function textHash32(str){
+  let h = 5381;
+  for(let i=0;i<str.length;i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
+function activeGateList(gates){
+  return Object.entries(gates || {}).filter(([,v])=>!!v).map(([k])=>k);
+}
+function loadAIReviews(){
+  try{ const raw=localStorage.getItem(AI_REVIEW_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveAIReviews(arr){ localStorage.setItem(AI_REVIEW_KEY, JSON.stringify(arr.slice(-120))); }
+function storeAIReview(level, raw, m, fin, aiData){
+  const rec = {
+    ts: new Date().toISOString(),
+    level,
+    textHash: textHash32(raw || ""),
+    score50: fin?.rubric50?.score50 ?? 0,
+    modules: fin?.rubric50?.modules || {},
+    gates: activeGateList(fin?.gates || {}),
+    topWords: (m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    aiReview: aiData || null
+  };
+  const arr=loadAIReviews(); arr.push(rec); saveAIReviews(arr);
+}
+
+function loadExampleLibrary(){
+  try{ const raw=localStorage.getItem(EXAMPLE_LIB_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveExampleLibrary(arr){ localStorage.setItem(EXAMPLE_LIB_KEY, JSON.stringify(arr.slice(-400))); }
+function anonymizeExampleText(raw){
+  const lines=(raw||"").split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const trimmed=lines.join(" ").slice(0,900);
+  return trimmed
+    .replace(/\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g, "[NOM]")
+    .replace(/\b\d{1,2}[hH]\d{0,2}\b/g,"[HEURE]")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g,"[DATE]");
+}
+function extractAdviceFromState(state){
+  const out=[];
+  const comment=String(state?.fin?.comment||"");
+  for(const line of comment.split(/\n+/)){
+    const t=line.trim();
+    if(t.startsWith("- ")) out.push(t.slice(2));
+  }
+  const ai = state?.fin?.ai;
+  if(ai?.priorities && Array.isArray(ai.priorities)){
+    for(const p of ai.priorities){
+      if(p?.do_next) out.push(String(p.do_next));
+      else if(typeof p === 'string') out.push(p);
+    }
+  }
+  return [...new Set(out.filter(Boolean))].slice(0,8);
+}
+function addGoodExampleFromState(state, options={}){
+  const raw = state?.raw || state?.m?.text || "";
+  const advice = extractAdviceFromState(state);
+  const ex = {
+    ts: new Date().toISOString(),
+    level: state.level,
+    textHash: textHash32(raw),
+    text: options.anonymize ? anonymizeExampleText(raw) : String(raw).slice(0,900),
+    score50: state?.fin?.rubric50?.score50 ?? 0,
+    modules: state?.fin?.rubric50?.modules || {},
+    gates: activeGateList(state?.fin?.gates || {}),
+    topWords: (state?.m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    audit: (state?.fin?.audit||[]).slice(-12),
+    advice
+  };
+  const lib=loadExampleLibrary();
+  lib.push(ex);
+  saveExampleLibrary(lib);
+  return ex;
+}
+function findNearExamples(state, maxN=3){
+  const lib=loadExampleLibrary();
+  const curWords = new Set((state?.m?.topWords||[]).slice(0,8).map(x=>x[0]));
+  const curGates = new Set(activeGateList(state?.fin?.gates || {}));
+  const level=state?.level;
+  const scored = lib.map(e=>{
+    const ew = new Set(e.topWords||[]);
+    const eg = new Set(e.gates||[]);
+    let overlap=0; for(const w of curWords){ if(ew.has(w)) overlap++; }
+    let gateMatch=0; for(const g of curGates){ if(eg.has(g)) gateMatch++; }
+    const levelBonus = e.level===level ? 2 : 0;
+    const score = overlap*2 + gateMatch*3 + levelBonus;
+    return {e, simScore: score, overlap, gateMatch};
+  }).filter(x=>x.simScore>0).sort((a,b)=>b.simScore-a.simScore).slice(0,maxN);
+
+  const advice=[];
+  for(const s of scored){
+    for(const a of (s.e.advice||[])) advice.push(a);
+  }
+  const suggested=[...new Set(advice)].slice(0,2);
+  return {examples: scored, suggested};
+}
+function renderNearExamples(state){
+  const box = document.getElementById("nearExamples");
+  const tips = document.getElementById("suggestedTips");
+  if(!box || !tips){ return; }
+  const near = findNearExamples(state, 3);
+  if(!near.examples.length){
+    box.textContent = "Bibliothèque vide ou pas d'exemples similaires pour l’instant.";
+    tips.textContent = "Conseils recopiables: —";
+    return;
+  }
+  box.textContent = near.examples.map((x,i)=>{
+    const e=x.e;
+    const corrected = (e.advice||[]).slice(0,2).map(a=>`- ${a}`).join("\n") || "- —";
+    return `#${i+1} (sim=${x.simScore}, mots communs=${x.overlap}, gates communes=${x.gateMatch})\nCe qui ressemblait: ${e.text.slice(0,180)}${e.text.length>180?"…":""}\nComment on l'avait corrigé:\n${corrected}`;
+  }).join("\n\n");
+  tips.textContent = near.suggested.length
+    ? `Conseils recopiables (2):\n- ${near.suggested[0]}\n- ${near.suggested[1] || near.suggested[0]}`
+    : "Conseils recopiables: —";
+}
+
+function loadAICfg(){
+  try{
+    const raw = localStorage.getItem(AI_CFG_KEY);
+    const base = {mode:"OFF", endpoint:"", saveInHistory:false};
+    if(!raw) return base;
+    const p = JSON.parse(raw);
+    return {
+      mode: ["OFF","AUTO","ONLINE"].includes(p?.mode) ? p.mode : "OFF",
+      endpoint: String(p?.endpoint || ""),
+      saveInHistory: !!p?.saveInHistory
+    };
+  } catch { return {mode:"OFF", endpoint:"", saveInHistory:false}; }
+}
+function saveAICfg(cfg){
+  localStorage.setItem(AI_CFG_KEY, JSON.stringify({
+    mode: cfg.mode,
+    endpoint: cfg.endpoint,
+    saveInHistory: !!cfg.saveInHistory
+  }));
+}
+function shouldUseAI(mode){
+  if(mode === "ONLINE") return true;
+  if(mode === "AUTO") return !!navigator.onLine;
+  return false;
+}
+function buildAIPayload(level, raw, m, fin){
+  return {
+    tool: "EVALUATORR",
+    level,
+    text: raw,
+    local: {
+      score50: fin.rubric50?.score50 ?? 0,
+      modules9: fin.rubric50?.modules || {},
+      gates: fin.gates || {},
+      keyMetrics: {
+        words: m.words,
+        sentences: m.sents.length,
+        paragraphs: m.paras.length,
+        timeHits: m.timeHits,
+        placeHits: m.placeHits,
+        sensesCovered: m.sensesCovered,
+        nonVisualCovered: m.nonVisualCovered,
+        turnsCount: m.turnsCount,
+        actionPairs: m.actionPairs
+      }
+    },
+    wanted: {jsonSchemaVersion:"1"}
+  };
+}
+async function fetchAIReport(endpoint, payload, timeoutMs=12000){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), timeoutMs);
+  try{
+    const res = await fetch(endpoint, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    });
+    const txt = await res.text();
+    let data = null;
+    try{ data = JSON.parse(txt); } catch { data = {raw: txt}; }
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    return {ok:true, data};
+  } catch(e){
+    return {ok:false, error: e?.message || "Erreur réseau"};
+  } finally { clearTimeout(t); }
+}
+function renderAIBox(obj){
+  const box = document.getElementById("aiDiag");
+  if(!box) return;
+  if(!obj){ box.textContent = "—"; return; }
+  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
+  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
+  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
+  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  box.textContent = `Diagnostic IA
+${fmt(diag)}
+
+Conseils prioritaires
+${fmt(conseils)}
+
+Réécritures ciblées (2)
+${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
+
+Appréciation bulletin (optionnel)
+${app || "—"}`;
+}
+const CALIB_KEY = "evaluator_v2_calibration_v1";
+const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
+
+function defaultCalibrationStore(){
+  return {
+    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
+  };
+}
+function loadCalibration(){
+  try{
+    const raw = localStorage.getItem(CALIB_KEY);
+    if(!raw) return defaultCalibrationStore();
+    const parsed = JSON.parse(raw);
+    const base = defaultCalibrationStore();
+    for(const lv of ["5e","4e","3e"]){
+      const p = parsed?.[lv] || {};
+      base[lv] = {
+        n: Number(p.n || 0),
+        deltaMean: Number(p.deltaMean || 0),
+        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
+        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
+      };
+    }
+    return base;
+  } catch { return defaultCalibrationStore(); }
+}
+function saveCalibration(data){
+  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
+}
+function getGateCap50(level, gates){
+  let cap = 50;
+  if(gates?.noEndPunct) cap = Math.min(cap, 24);
+  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
+  if(gates?.paragraphGate) cap = Math.min(cap, 35);
+  if(gates?.sensesGate) cap = Math.min(cap, 35);
+  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
+  return cap;
+}
+function isCalibrationEnabled(){
+  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
+}
+function setCalibrationEnabled(v){
+  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
+}
+function computeCalibrated50(level, rawScore50, gates){
+  const enabled = isCalibrationEnabled();
+  const store = loadCalibration();
+  const profile = store[level] || defaultCalibrationStore()[level];
+  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
+  const cap = getGateCap50(level, gates || {});
+  const score = roundToHalf(Math.min(adjusted, cap));
+  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
+}
+function learnCalibration(level, toolScore50, teacherScore50){
+  const store = loadCalibration();
+  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
+  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
+  const rawDelta = teacherScore50 - toolScore50;
+  const delta = clamp(rawDelta, -clampMax, clampMax);
+  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
+  last.push(Number(delta.toFixed(3)));
+  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
+  store[level] = {
+    n: Number(prof.n || 0) + 1,
+    deltaMean: Number(deltaMean.toFixed(3)),
+    lastDeltas: last,
+    clampMax
+  };
+  saveCalibration(store);
+  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
+}
+
 
 /* ========= Exports ========= */
 function downloadFile(filename, content, mime){
@@ -1422,7 +2441,8 @@ function makePayload(state){
     thresholds: fin.levelCfg,
     pass1: { score10: p1.score, parts: p1.parts },
     pass2: { score10: p2.score, parts: p2.parts },
-    final: { score20: fin.final, verdict: fin.verdict },
+    final: { score20: fin.final, score20_raw: fin.score20_raw, score20_capped: fin.score20_capped, score50: fin.rubric50?.score50 ?? 0, score50Calibrated: fin.calib50?.score ?? fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
+    rubric50: fin.rubric50,
     metrics: {
       words: m.words,
       sentences: m.sents.length,
@@ -1455,7 +2475,9 @@ function makePayload(state){
       veryLongSentences: m.veryLongSentences.length
     },
     audit: fin.audit,
-    comment: fin.comment
+    comment: fin.comment,
+    trace: fin.trace || [],
+    ai: fin.ai || null
   };
 }
 function toCSVRow(fields){
@@ -1468,12 +2490,16 @@ function exportCSV(state){
   const gates = Object.entries(fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|");
   const topWord = (m.topWords[0]?.[0] ?? "");
   const header = [
-    "timestamp","student","level","final20","pass1_10","pass2_10","words","sentences","paragraphs",
+    "timestamp","student","level","final20","final50","final50Cal","deltaMean50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_temps_lieu","mod_lexique","mod_cohesion","mod_coherence",
+    "words","sentences","paragraphs",
     "endPunct","avgSent","sdSent","mattr","hapaxRatio","top1Share","topWord","suspects","aposBad","confusions",
     "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
   ];
   const row = [
-    new Date().toISOString(), student, level, fin.final, p1.score, p2.score,
+    new Date().toISOString(), student, level, fin.final, (fin.rubric50?.score50 ?? 0), (fin.calib50?.score ?? fin.rubric50?.score50 ?? 0), (fin.calib50?.deltaMean ?? 0), p1.score, p2.score,
+    fin.rubric50?.modules?.langue?.score ?? 0, fin.rubric50?.modules?.narration?.score ?? 0, fin.rubric50?.modules?.description?.score ?? 0,
+    fin.rubric50?.modules?.dialogues?.score ?? 0, fin.rubric50?.modules?.style?.score ?? 0, fin.rubric50?.modules?.temps_lieu?.score ?? 0,
+    fin.rubric50?.modules?.lexique?.score ?? 0, fin.rubric50?.modules?.cohesion?.score ?? 0, fin.rubric50?.modules?.coherence?.score ?? 0,
     m.words, m.sents.length, m.paras.length,
     m.endPunct, m.avgSent.toFixed(2), m.sdSent.toFixed(2), m.mattr.toFixed(4), m.hapaxRatio.toFixed(4),
     m.top1Share.toFixed(4), topWord, m.suspectTotal, m.aposBad, m.confusionTotal,
@@ -1500,6 +2526,7 @@ function saveHistory(arr){
 function renderHistory(){
   const box = document.getElementById("historyBox");
   const info = document.getElementById("histInfo");
+  if(!box || !info) return;
   const arr = loadHistory();
   info.textContent = `${arr.length} entrée(s)`;
   if(!arr.length){
@@ -1509,7 +2536,7 @@ function renderHistory(){
   const lines = arr.slice(-12).reverse().map(x=>{
     const d = new Date(x.timestamp);
     const ds = isNaN(d.getTime()) ? x.timestamp : d.toLocaleString();
-    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 — mots:${x.words} — gates:${x.gates||"—"}`;
+    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 (${x.final50 ?? "—"}/50 → ${x.final50Cal ?? "—"}/50, Δmoy=${(x.deltaMean50 ?? 0)>=0?"+":""}${Number(x.deltaMean50 ?? 0).toFixed(2)}) — mots:${x.words} — gates:${x.gates||"—"}`;
   }).join("\n");
   box.textContent = lines;
 }
@@ -1536,9 +2563,35 @@ document.getElementById("passScores").textContent =
   `${p1.score.toFixed(1)}/10  •  ${p2.score.toFixed(1)}/10  •  +${p3s.toFixed(1)} exc`;
   document.getElementById("finalScore").textContent = `${fin.final.toFixed(1)}/20`;
   document.getElementById("finalVerdict").textContent = fin.verdict;
+  const raw50 = (fin.rubric50?.score50 ?? 0);
+  const cal50 = (fin.calib50?.score ?? raw50);
+  const calOn = !!fin.calib50?.enabled;
+  const tgl = document.getElementById("toggleCalibration");
+  if(tgl) tgl.checked = calOn;
+  document.getElementById("finalScore50").textContent = calOn
+    ? `${raw50.toFixed(1)}/50 → calibrée ${cal50.toFixed(1)}/50`
+    : `${raw50.toFixed(1)}/50`;
+  const capLabel = (fin.rubric50?.caps50 || []).map(c=>`≤${c.cap50}`).join(", ") || "aucun plafond";
+  const dm = fin.calib50?.deltaMean ?? 0;
+  document.getElementById("final50Hint").textContent = `Calibration ${calOn?"ON":"OFF"} (Δmoy=${dm>=0?"+":""}${dm.toFixed(2)}, n=${fin.calib50?.n ?? 0}) • ${(fin.rubric50?.caps50||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
+  const pct50 = clamp01((fin.rubric50?.score50 ?? 0)/50)*100;
+  const b50 = document.getElementById("finalBar50"); if(b50) b50.style.width = pct50.toFixed(1)+"%";
 
   const pct = clamp01(fin.final/20) * 100;
   document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
+
+  const tbody = document.querySelector("#rubricTable tbody");
+  if(tbody){
+    const labels = {
+      narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style",
+      temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence", langue:"Langue"
+    };
+    const list = fin.rubric50?.modules || {};
+    tbody.innerHTML = Object.entries(list).map(([k,v])=>{
+      const keyLine = diagnoseRubricModule(k, v, fin.trace || []);
+      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
+    }).join("") || `<tr><td colspan="3">—</td></tr>`;
+  }
 
   const ul = document.getElementById("auditList");
   ul.innerHTML = "";
@@ -1546,6 +2599,42 @@ document.getElementById("passScores").textContent =
     const li = document.createElement("li");
     li.textContent = line;
     ul.appendChild(li);
+  }
+
+  const traceSorted = [...(fin.trace||[])].sort((a,b)=>{
+    if(a.module!==b.module) return a.module.localeCompare(b.module);
+    if(a.delta!==b.delta) return a.delta-b.delta;
+    return a.ruleId.localeCompare(b.ruleId);
+  });
+
+  const evidencesByModule = {};
+  traceSorted.forEach((t, traceIdx)=>{
+    const cat = categoryFromTraceItem(t);
+    const evs = (t.evidence||[]).filter(e=>Number.isFinite(e.start) && Number.isFinite(e.end) && e.end>e.start).slice(0,3);
+    if(!evs.length) return;
+    if(!evidencesByModule[cat]) evidencesByModule[cat] = [];
+    for(const e of evs) evidencesByModule[cat].push({start:e.start, end:e.end, traceIdx});
+  });
+  const highlighted = applyHighlights(m.text, evidencesByModule);
+  const annotatedText = document.getElementById("annotatedText");
+  if(annotatedText) annotatedText.innerHTML = highlighted.html;
+  const annotatedMeta = document.getElementById("annotatedMeta");
+  if(annotatedMeta){
+    annotatedMeta.textContent = highlighted.omitted > 0
+      ? `Surlignages: ${highlighted.totalShown}/${highlighted.totalOriginal} (limite 80, +${highlighted.omitted} autres occurrences).`
+      : `Surlignages: ${highlighted.totalShown}/${highlighted.totalOriginal}.`;
+  }
+
+  const traceBox = document.getElementById("traceBox");
+  if(traceBox){
+    traceBox.innerHTML = traceSorted.length ? traceSorted.map((t, idx)=>{
+      const ev = (t.evidence||[]).slice(0,1).map(e=>`[${e.start}-${e.end}] ${escapeHtml(e.excerpt||"")}`).join(" • ");
+      const target = highlighted.traceToMarkIds[idx]?.[0] || "";
+      return `<button class="trace-item" type="button" data-mark-id="${escapeHtml(target)}"><strong>${t.delta>=0?"+":""}${t.delta.toFixed(1)} • ${escapeHtml(t.module)}/${escapeHtml(t.ruleId)}</strong> — ${escapeHtml(t.message)}${ev?`<span class="ev">↳ ${ev}</span>`:""}</button>`;
+    }).join("") : "—";
+    traceBox.querySelectorAll(".trace-item").forEach(btn=>{
+      btn.addEventListener("click", ()=>scrollToHighlight(btn.getAttribute("data-mark-id")));
+    });
   }
 
   document.getElementById("alerts").innerHTML = fin.alertHtml;
@@ -1561,30 +2650,92 @@ POV interne : ${m.internalHits} (je=${m.jeCount})
 Lumière/ombre : ${m.lightHits}
 Sens couverts : ${m.sensesCovered}/5 (non-visuels=${m.nonVisualCovered})
 Lexique : MATTR=${m.mattr.toFixed(2)} • hapax=${(m.hapaxRatio*100).toFixed(0)}% • top1=${(m.top1Share*100).toFixed(1)}% (${m.topWords[0]?.[0]||"—"})
-Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}`;
+Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}
+Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée ${(fin.calib50?.score ?? fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 
+  document.getElementById("contentProbe").textContent = probe;
 
+  const langueDetail = document.getElementById("langueDetail");
+  if(langueDetail){
+    const lines = [];
+    for(const c of (m.confusionHits||[])) for(const e of (c.evidence||[]).slice(0,2)) lines.push(`• ${c.name} (probable) — « ${e.excerpt} »`);
+    for(const a of (m.agreementLikelyDet||[]).slice(0,3)) lines.push(`• Accord probable (det+nom) — « ${a.evidence.excerpt} »`);
+    for(const a of (m.agreementLikelySubj||[]).slice(0,3)) lines.push(`• Accord probable (ils/elles + verbe) — « ${a.evidence.excerpt} »`);
+    if(m.tenseMixWarn?.active) lines.push("• Conjugaison probable : mélange de temps (hier + présent). ");
+    langueDetail.textContent = lines.slice(0,10).join("\n") || "Aucune alerte langue saillante.";
+  }
+
+  const drillsBox = document.getElementById("drillsBox");
+  if(drillsBox){
+    const drills = fin.microDrills || [];
+    drillsBox.textContent = drills.length ? drills.map(d=>`${d.title}\n${(d.lines||[]).join("\n")}`).join("\n\n") : "Pas d'exercice ciblé pour cette copie.";
+  }
+
+  const rpBox = document.getElementById("rewritePlan");
+  if(rpBox){
+    const rp = fin.rewritePlan || [];
+    rpBox.textContent = rp.length ? rp.map((p, i)=>`${i+1}. ${p.title}\nPourquoi : ${p.why}\nPreuve : « ${p.evidenceExcerpt} »\nÀ faire :\n- ${(p.doNext||[]).join("\n- ")}`).join("\n\n") : "—";
+  }
+
+  const d = m.dialogue || {};
+  const dr = document.getElementById("dialogueReport");
+  if(dr){
+    dr.textContent = `Répliques: ${d.nbRepliques||0} • plus longue: ${d.longestRep||0} mots • ratio dialogue: ${(((d.ratioDialogue||0)*100).toFixed(1))}%
+` +
+      `Incises: ${d.nbIncises||0} • Majuscule après tiret: ${Math.round((d.dashMajRatio||0)*100)}% • Guillemets équilibrés: ${(d.quoteBalanced?"oui":"non")}
+` +
+      `Friction: ${(d.friction?"oui":"non")} • Bascule: ${(d.bascule?"oui":"non")} • Sortie: ${(d.sortie?"oui":"non")}`;
+  }
   renderHistory();
 }
 
 /* ========= Actions ========= */
 const elText = document.getElementById("text");
-const status = document.getElementById("status");
-function setStatus(s){ status.textContent = s; }
+const status = document.getElementById("status") || {textContent:""};
+function setStatus(s){ if(status) status.textContent = s; }
+function bindEvt(id, evt, fn){ const el = document.getElementById(id); if(el) el.addEventListener(evt, fn); }
 
-document.getElementById("btnEval").addEventListener("click", ()=>{
+const calToggle = document.getElementById("toggleCalibration");
+if(calToggle) calToggle.checked = isCalibrationEnabled();
+const aiCfg = loadAICfg();
+const aiModeEl = document.getElementById("aiMode");
+const aiEndpointEl = document.getElementById("aiEndpoint");
+const saveAIHistoryEl = document.getElementById("saveAIHistory");
+if(aiModeEl) aiModeEl.value = aiCfg.mode;
+if(aiEndpointEl) aiEndpointEl.value = aiCfg.endpoint;
+if(saveAIHistoryEl) saveAIHistoryEl.checked = !!aiCfg.saveInHistory;
+function persistAICfgFromUI(){
+  saveAICfg({
+    mode: aiModeEl?.value || "OFF",
+    endpoint: (aiEndpointEl?.value || "").trim(),
+    saveInHistory: !!saveAIHistoryEl?.checked
+  });
+}
+if(aiModeEl) aiModeEl.addEventListener("change", persistAICfgFromUI);
+if(aiEndpointEl) aiEndpointEl.addEventListener("change", persistAICfgFromUI);
+if(saveAIHistoryEl) saveAIHistoryEl.addEventListener("change", persistAICfgFromUI);
+
+
+function runLocalEvaluation(raw, level){
+  const m = computeMetrics(raw);
+  const p1 = scorePass1(m, level);
+  const p2 = scorePass2(m, level);
+  const fin = buildFinal(m, p1, p2, level, raw);
+  renderAll(level, m, p1, p2, fin);
+  window.__last = {level, raw, m, p1, p2, fin};
+  renderNearExamples(window.__last);
+  return window.__last;
+}
+
+bindEvt("btnEval","click", ()=>{
   try{
     document.getElementById("errBox").style.display = "none";
     const raw = normalizeText(elText.value);
     if(!raw){ setStatus("Colle un texte d’abord."); return; }
     setStatus("Analyse…");
     const level = document.getElementById("level").value;
-    const m = computeMetrics(raw);
-    const p1 = scorePass1(m, level);
-    const p2 = scorePass2(m, level);
-    const fin = buildFinal(m, p1, p2, level);
-    renderAll(level, m, p1, p2, fin);
-    window.__last = {level, m, p1, p2, fin};
+    runLocalEvaluation(raw, level);
+    renderAIBox(null);
     setStatus("Terminé.");
   } catch(e){
     const errBox = document.getElementById("errBox");
@@ -1594,12 +2745,95 @@ document.getElementById("btnEval").addEventListener("click", ()=>{
   }
 });
 
-document.getElementById("btnClear").addEventListener("click", ()=>{
+
+
+document.getElementById("btnTestAI")?.addEventListener("click", async ()=>{
+  persistAICfgFromUI();
+  const endpoint = (aiEndpointEl?.value || "").trim();
+  if(!endpoint){ setStatus("Saisis un endpoint IA."); return; }
+  setStatus("Test endpoint IA…");
+  const ping = await fetchAIReport(endpoint, {tool:"EVALUATORR", wanted:{jsonSchemaVersion:"1"}}, 12000);
+  setStatus(ping.ok ? "Endpoint IA OK." : "Endpoint IA indisponible.");
+});
+
+document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
+  try{
+    document.getElementById("errBox").style.display = "none";
+    const raw = normalizeText(elText.value);
+    if(!raw){ setStatus("Colle un texte d’abord."); return; }
+    const level = document.getElementById("level").value;
+    const base = runLocalEvaluation(raw, level);
+    persistAICfgFromUI();
+
+    const aiMode = aiModeEl?.value || "OFF";
+    const endpoint = (aiEndpointEl?.value || "").trim();
+    const minWords = LEVEL[level]?.minWords || 150;
+    if(base.m.words < minWords){
+      setStatus(`IA non envoyée : texte trop court (<${minWords} mots). Offline OK.`);
+      renderAIBox({diagnostic:"IA non sollicitée (seuil de mots non atteint).", conseils:["Allonger la copie avant appel IA."], reecritures:[]});
+      return;
+    }
+    if(!shouldUseAI(aiMode)){ setStatus("Mode IA OFF/AUTO hors-ligne : offline OK."); renderAIBox({diagnostic:"Mode IA inactif.", conseils:[], reecritures:[]}); return; }
+    if(!endpoint){ setStatus("Endpoint IA manquant, offline OK."); renderAIBox({diagnostic:"Endpoint IA non configuré.", conseils:[], reecritures:[]}); return; }
+
+    setStatus("Éval locale OK, appel IA…");
+    const payload = buildAIPayload(level, raw, base.m, base.fin);
+    const ai = await fetchAIReport(endpoint, payload, 12000);
+    if(!ai.ok){
+      setStatus("IA indisponible, offline OK.");
+      renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:["Conserver le diagnostic local."], reecritures:[]});
+      return;
+    }
+    renderAIBox(ai.data || {});
+    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
+    if(saveAIHistoryEl?.checked){
+      if(window.__last?.fin) window.__last.fin.ai = ai.data;
+    }
+    setStatus("Évaluation + IA terminée.");
+  } catch(e){
+    setStatus("IA indisponible, offline OK.");
+    renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:[], reecritures:[]});
+  }
+});
+
+document.getElementById("btnMarkGoodExample")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const anonymize = !!document.getElementById("exampleAnonymize")?.checked;
+  const ex = addGoodExampleFromState(last, {anonymize});
+  renderNearExamples(last);
+  setStatus(`Exemple ajouté à la bibliothèque (${ex.level}, ${ex.score50}/50).`);
+});
+
+document.getElementById("btnLearnCalibration")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const val = Number(document.getElementById("teacherScore50").value);
+  if(!Number.isFinite(val)){ setStatus("Saisis une note prof /50."); return; }
+  const teacher = clamp(roundToHalf(val), 0, 50);
+  const learnt = learnCalibration(last.level, last.fin.rubric50?.score50 ?? 0, teacher);
+  const cap = getGateCap50(last.level, last.fin.gates || {});
+  last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+  renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  setStatus(`Calibration OK (Δ=${learnt.delta>=0?"+":""}${learnt.delta.toFixed(1)}, Δmoy=${learnt.deltaMean>=0?"+":""}${learnt.deltaMean.toFixed(2)}, cap=${cap}/50).`);
+});
+
+document.getElementById("toggleCalibration")?.addEventListener("change", (e)=>{
+  setCalibrationEnabled(!!e.target.checked);
+  const last = window.__last;
+  if(last){
+    last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+    renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  }
+  setStatus(`Calibration ${e.target.checked?"activée":"désactivée"}.`);
+});
+
+bindEvt("btnClear","click", ()=>{
   elText.value = "";
   setStatus("Effacé.");
 });
 
-document.getElementById("btnExample").addEventListener("click", ()=>{
+bindEvt("btnExample","click", ()=>{
   // Exemple volontairement “bon” mais pas parfait : v2 doit rester exigeant
   elText.value =
 `Je suis rentré tard, et la pluie avait laissé une odeur de goudron chaud sur le trottoir. Dans l’entrée, le plafonnier clignotait : une lumière jaune, mal assurée.
@@ -1609,7 +2843,7 @@ Je suis resté sur le seuil. Je me suis dit que si j’entrais, quelque chose me
   setStatus("Exemple inséré.");
 });
 
-document.getElementById("btnCopy").addEventListener("click", async ()=>{
+bindEvt("btnCopy","click", async ()=>{
   const txt = document.getElementById("comment").textContent || "";
   if(!txt || txt === "—") return;
   try{
@@ -1620,14 +2854,25 @@ document.getElementById("btnCopy").addEventListener("click", async ()=>{
   }
 });
 
-document.getElementById("btnExportTxt").addEventListener("click", ()=>{
+bindEvt("btnCopyPlan","click", async ()=>{
+  const txt = document.getElementById("rewritePlan").textContent || "";
+  if(!txt || txt === "—") return;
+  try{
+    await navigator.clipboard.writeText(txt);
+    setStatus("Plan copié.");
+  } catch {
+    setStatus("Copie du plan impossible (permissions navigateur).");
+  }
+});
+
+bindEvt("btnExportTxt","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   downloadFile("evaluator_v2_commentaire.txt", last.fin.comment + "\n", "text/plain;charset=utf-8");
   setStatus("TXT exporté.");
 });
 
-document.getElementById("btnExportJson").addEventListener("click", ()=>{
+bindEvt("btnExportJson","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const payload = makePayload(last);
@@ -1635,14 +2880,14 @@ document.getElementById("btnExportJson").addEventListener("click", ()=>{
   setStatus("JSON exporté.");
 });
 
-document.getElementById("btnExportCsv").addEventListener("click", ()=>{
+bindEvt("btnExportCsv","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   exportCSV(last);
   setStatus("CSV exporté.");
 });
 
-document.getElementById("btnSave").addEventListener("click", ()=>{
+bindEvt("btnSave","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const student = (document.getElementById("student").value || "").trim();
@@ -1652,10 +2897,14 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
     student,
     level: last.level,
     final20: last.fin.final,
+    final50: last.fin.rubric50?.score50 ?? 0,
+    final50Cal: last.fin.calib50?.score ?? last.fin.rubric50?.score50 ?? 0,
+    deltaMean50: last.fin.calib50?.deltaMean ?? 0,
     pass1_10: last.p1.score,
     pass2_10: last.p2.score,
     words: last.m.words,
-    gates
+    gates,
+    aiSaved: !!(last.fin && last.fin.ai)
   };
   const arr = loadHistory();
   arr.push(entry);
@@ -1664,7 +2913,7 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
   setStatus("Entrée sauvegardée.");
 });
 
-document.getElementById("btnClearHistory").addEventListener("click", ()=>{
+bindEvt("btnClearHistory","click", ()=>{
   localStorage.removeItem(HIST_KEY);
   renderHistory();
   setStatus("Historique vidé.");
@@ -1687,11 +2936,11 @@ function showView(view){
   }
 }
 
-document.getElementById("goHome")?.addEventListener("click", ()=>showView("home"));
-document.getElementById("goApp")?.addEventListener("click",  ()=>showView("app"));
-document.getElementById("startBtn")?.addEventListener("click", ()=>showView("app"));
+bindEvt("goHome","click", ()=>showView("home"));
+bindEvt("goApp","click",  ()=>showView("app"));
+bindEvt("startBtn","click", ()=>showView("app"));
 
-document.getElementById("quickPasteBtn")?.addEventListener("click", ()=>{
+bindEvt("quickPasteBtn","click", ()=>{
   showView("app");
   const t = document.getElementById("text");
   if(!t) return;
