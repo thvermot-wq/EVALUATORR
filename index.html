@@ -154,6 +154,21 @@
   color: var(--muted); font-size: 12px;
 }
 
+
+    .trace-item{display:block; width:100%; text-align:left; margin:6px 0; padding:8px; border:1px solid var(--line); border-radius:10px; background:rgba(15,22,34,.5); color:var(--text); cursor:pointer}
+    .trace-item:hover{border-color: rgba(106,169,255,.55)}
+    .trace-item .ev{display:block; color:var(--muted); font-size:11px; margin-top:4px}
+    .annotated{white-space:pre-wrap; line-height:1.45}
+    mark.hl{padding:0 .08em; border-radius:4px; color:var(--text)}
+    mark.hl-langue{background: rgba(255,92,92,.28)}
+    mark.hl-dialogues{background: rgba(106,169,255,.32)}
+    mark.hl-temps_lieu{background: rgba(255,204,102,.35)}
+    mark.hl-senses{background: rgba(46,204,113,.28)}
+    mark.hl-cohesion{background: rgba(209,128,255,.30)}
+    mark.hl-lexique{background: rgba(100,220,255,.30)}
+    mark.hl-style_tics{background: rgba(255,128,128,.34)}
+    mark.hl-focus{outline:2px solid #fff; box-shadow:0 0 0 2px rgba(106,169,255,.35)}
+
   </style>
 </head>
 
@@ -418,6 +433,15 @@
       </div>
 
       <div style="margin-top:10px">
+        <details open>
+          <summary>Texte annoté</summary>
+          <div class="small" id="annotatedLegend">Catégories : langue, dialogues, temps/lieu, senses, cohesion, lexique, style-tics.</div>
+          <div class="out annotated" id="annotatedText">—</div>
+          <div class="small" id="annotatedMeta">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
         <details>
           <summary>Alertes</summary>
           <div id="alerts"></div>
@@ -531,6 +555,85 @@ function traceItem(module, ruleId, delta, message, evidence=[]){
 }
 function traceToAudit(trace){
   return (trace||[]).map(t=>`${t.module}/${t.ruleId} ${t.delta>=0?"+":""}${t.delta.toFixed(2)} : ${t.message}`);
+}
+function normalizeHighlightCategory(moduleName){
+  const m = String(moduleName || "").toLowerCase();
+  if(m === "temps/lieu" || m === "temps_lieu") return "temps_lieu";
+  if(m === "style-tics" || m === "style_tics") return "style_tics";
+  return m;
+}
+function categoryFromTraceItem(t){
+  if(!t) return "langue";
+  if(t.ruleId.startsWith("confusion_") || ["ortho","syn","pseg","cap_no_end_punct"].includes(t.ruleId)) return "langue";
+  if(["scene"].includes(t.ruleId)) return "dialogues";
+  if(["gate_time_place","cap_time_place"].includes(t.ruleId)) return "temps_lieu";
+  if(["sens","gate_senses","cap_senses"].includes(t.ruleId)) return "senses";
+  if(["motifs","coh"].includes(t.ruleId)) return "cohesion";
+  if(["lex"].includes(t.ruleId)) return "lexique";
+  if(["ld","ending","disabled"].includes(t.ruleId)) return "style_tics";
+  if(t.module === "pass1") return "langue";
+  if(t.module === "pass2") return "cohesion";
+  return "style_tics";
+}
+function applyHighlights(raw, evidencesByModule){
+  const text = normalizeText(raw || "");
+  const ranges = [];
+  for(const [cat, list] of Object.entries(evidencesByModule || {})){
+    const c = normalizeHighlightCategory(cat);
+    for(const e of (list || [])){
+      const start = clamp(Number(e.start||0), 0, text.length);
+      const end = clamp(Number(e.end||start), start, text.length);
+      if(end <= start) continue;
+      ranges.push({start,end,category:c,traceIdx:e.traceIdx ?? null});
+    }
+  }
+  ranges.sort((a,b)=>a.start-b.start || a.end-b.end);
+  const totalOriginal = ranges.length;
+  const limited = ranges.slice(0, 80);
+  const points = new Set([0, text.length]);
+  for(const r of limited){ points.add(r.start); points.add(r.end); }
+  const cuts = Array.from(points).sort((a,b)=>a-b);
+  const segments = [];
+  for(let i=0;i<cuts.length-1;i++){
+    const a = cuts[i], b = cuts[i+1];
+    if(b<=a) continue;
+    const active = limited.filter(r => r.start < b && r.end > a);
+    if(!active.length){ segments.push({text:text.slice(a,b)}); continue; }
+    const counts = {};
+    for(const r of active) counts[r.category] = (counts[r.category]||0)+1;
+    const category = Object.entries(counts).sort((x,y)=>y[1]-x[1])[0][0];
+    const traceIdx = active.find(r=>Number.isInteger(r.traceIdx))?.traceIdx;
+    segments.push({text:text.slice(a,b), category, traceIdx});
+  }
+
+  let html = "";
+  let markN = 0;
+  const traceToMarkIds = {};
+  for(const seg of segments){
+    const chunk = escapeHtml(seg.text);
+    if(!seg.category){ html += chunk; continue; }
+    const markId = `hl-${markN++}`;
+    html += `<mark id="${markId}" class="hl hl-${seg.category}" data-category="${seg.category}">${chunk}</mark>`;
+    if(Number.isInteger(seg.traceIdx)){
+      if(!traceToMarkIds[seg.traceIdx]) traceToMarkIds[seg.traceIdx] = [];
+      traceToMarkIds[seg.traceIdx].push(markId);
+    }
+  }
+  return {
+    html: html || "—",
+    totalOriginal,
+    totalShown: limited.length,
+    omitted: Math.max(0, totalOriginal - limited.length),
+    traceToMarkIds
+  };
+}
+function scrollToHighlight(markId){
+  if(!markId) return;
+  const el = document.getElementById(markId);
+  if(!el) return;
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  el.classList.add("hl-focus");
+  setTimeout(()=>el.classList.remove("hl-focus"), 1400);
 }
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 function clamp01(x){ return clamp(x, 0, 1); }
@@ -804,8 +907,16 @@ function computeMetrics(raw){
 
   const confusionHits = [];
   for(const c of CONFUSIONS){
-    const n = (lower.match(c.re) || []).length;
-    if(n > 0) confusionHits.push({name:c.name, n, hint:c.hint});
+    const re = new RegExp(c.re.source, c.re.flags);
+    const matches = [];
+    for(const m0 of lower.matchAll(re)){
+      const start = m0.index || 0;
+      const end = start + String(m0[0] || "").length;
+      matches.push(mkEvidence(text, start, end));
+      if(matches.length >= 6) break;
+    }
+    const n = matches.length || (lower.match(c.re) || []).length;
+    if(n > 0) confusionHits.push({name:c.name, n, hint:c.hint, evidence: matches});
   }
   const confusionTotal = confusionHits.reduce((a,x)=>a+x.n,0);
 
@@ -881,6 +992,7 @@ function computeMetrics(raw){
     longThr, longVeryThr, longSentences, veryLongSentences,
     filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
+    offsetMap: {kind:"normalized_identity", length:text.length},
     timeHits, placeHits, connCount, turnsCount, actionPairs,
     internalHits, povBias, jeCount, ilCount,
     lightHits, sensesHits, sensesCovered, nonVisualCovered,
@@ -1120,7 +1232,7 @@ function scorePass1(m, level){
   trace.push(traceItem("pass1","ortho", ortho, "Orthographe / grammaire."));
   trace.push(traceItem("pass1","lex", lex, "Lexique / répétitions / tics."));
   for(const c of (m.confusionHits||[])){
-    trace.push(traceItem("pass1", `confusion_${c.name}`, -0.1*c.n, `${c.name} détecté (${c.n}).`, firstEvidence(m.text)));
+    trace.push(traceItem("pass1", `confusion_${c.name}`, -0.1*c.n, `${c.name} détecté (${c.n}).`, (c.evidence && c.evidence.length) ? c.evidence : firstEvidence(m.text)));
   }
 
   return {score: roundToHalf(clamp(pass1, 0, 10)), audit: traceToAudit(trace), alerts, parts:{pseg, syn, ortho, lex}, gates, trace};
@@ -2130,17 +2242,40 @@ document.getElementById("passScores").textContent =
     ul.appendChild(li);
   }
 
+  const traceSorted = [...(fin.trace||[])].sort((a,b)=>{
+    if(a.module!==b.module) return a.module.localeCompare(b.module);
+    if(a.delta!==b.delta) return a.delta-b.delta;
+    return a.ruleId.localeCompare(b.ruleId);
+  });
+
+  const evidencesByModule = {};
+  traceSorted.forEach((t, traceIdx)=>{
+    const cat = categoryFromTraceItem(t);
+    const evs = (t.evidence||[]).filter(e=>Number.isFinite(e.start) && Number.isFinite(e.end) && e.end>e.start).slice(0,3);
+    if(!evs.length) return;
+    if(!evidencesByModule[cat]) evidencesByModule[cat] = [];
+    for(const e of evs) evidencesByModule[cat].push({start:e.start, end:e.end, traceIdx});
+  });
+  const highlighted = applyHighlights(m.text, evidencesByModule);
+  const annotatedText = document.getElementById("annotatedText");
+  if(annotatedText) annotatedText.innerHTML = highlighted.html;
+  const annotatedMeta = document.getElementById("annotatedMeta");
+  if(annotatedMeta){
+    annotatedMeta.textContent = highlighted.omitted > 0
+      ? `Surlignages: ${highlighted.totalShown}/${highlighted.totalOriginal} (limite 80, +${highlighted.omitted} autres occurrences).`
+      : `Surlignages: ${highlighted.totalShown}/${highlighted.totalOriginal}.`;
+  }
+
   const traceBox = document.getElementById("traceBox");
   if(traceBox){
-    const lines = [...(fin.trace||[])].sort((a,b)=>{
-      if(a.module!==b.module) return a.module.localeCompare(b.module);
-      if(a.delta!==b.delta) return a.delta-b.delta;
-      return a.ruleId.localeCompare(b.ruleId);
-    }).map(t=>{
-      const ev = (t.evidence||[]).slice(0,2).map(e=>`    ↳ [${e.start}-${e.end}] ${e.excerpt}`).join("\n");
-      return `${t.delta>=0?"+":""}${t.delta.toFixed(1)} • ${t.module}/${t.ruleId} — ${t.message}${ev?"\n"+ev:""}`;
+    traceBox.innerHTML = traceSorted.length ? traceSorted.map((t, idx)=>{
+      const ev = (t.evidence||[]).slice(0,1).map(e=>`[${e.start}-${e.end}] ${escapeHtml(e.excerpt||"")}`).join(" • ");
+      const target = highlighted.traceToMarkIds[idx]?.[0] || "";
+      return `<button class="trace-item" type="button" data-mark-id="${escapeHtml(target)}"><strong>${t.delta>=0?"+":""}${t.delta.toFixed(1)} • ${escapeHtml(t.module)}/${escapeHtml(t.ruleId)}</strong> — ${escapeHtml(t.message)}${ev?`<span class="ev">↳ ${ev}</span>`:""}</button>`;
+    }).join("") : "—";
+    traceBox.querySelectorAll(".trace-item").forEach(btn=>{
+      btn.addEventListener("click", ()=>scrollToHighlight(btn.getAttribute("data-mark-id")));
     });
-    traceBox.textContent = lines.length ? lines.join("\n") : "—";
   }
 
   document.getElementById("alerts").innerHTML = fin.alertHtml;
