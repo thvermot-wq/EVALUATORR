@@ -456,6 +456,13 @@
       </div>
 
       <div style="margin-top:10px">
+        <details open>
+          <summary>Rapport dialogues</summary>
+          <div class="out" id="dialogueReport">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
         <details>
           <summary>Diagnostic IA</summary>
           <div class="out" id="aiDiag">—</div>
@@ -565,7 +572,7 @@ function normalizeHighlightCategory(moduleName){
 function categoryFromTraceItem(t){
   if(!t) return "langue";
   if(t.ruleId.startsWith("confusion_") || ["ortho","syn","pseg","cap_no_end_punct"].includes(t.ruleId)) return "langue";
-  if(["scene"].includes(t.ruleId)) return "dialogues";
+  if(["scene","dialogue_count","dialogue_punct","dialogue_friction","dialogue_bascule","dialogue_sortie","dialogue_quotes_unbalanced","dialogue_missing_markers"].includes(t.ruleId)) return "dialogues";
   if(["gate_time_place","cap_time_place"].includes(t.ruleId)) return "temps_lieu";
   if(["sens","gate_senses","cap_senses"].includes(t.ruleId)) return "senses";
   if(["motifs","coh"].includes(t.ruleId)) return "cohesion";
@@ -651,6 +658,17 @@ function countOccurrences(textLower, phrase){
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp("\\b" + escaped + "\\b", "g");
   return (textLower.match(re) || []).length;
+}
+function findAllWithEvidence(text, re, limit=8){
+  const out = [];
+  const src = (re instanceof RegExp) ? new RegExp(re.source, re.flags.includes("g") ? re.flags : (re.flags + "g")) : re;
+  for(const m of String(text||"").matchAll(src)){
+    const start = m.index || 0;
+    const end = start + String(m[0]||"").length;
+    out.push(mkEvidence(text, start, end));
+    if(out.length >= limit) break;
+  }
+  return out;
 }
 function computeMATTR(filteredTokens, windowSize=50){
   if(filteredTokens.length===0) return 0;
@@ -778,6 +796,12 @@ const CONFUSIONS = [
   {name:"ces/ses", re:/\bces\b\s+(trucs|affaires|parents|amis|idées)\b/g, hint:"Confusion possible ces/ses."},
   {name:"on/ont", re:/\bon\b\s+(été|avait|fait|vu|pris)\b/g, hint:"Confusion possible on/ont."}
 ];
+
+const DIALOGUE_INCISORS = ["dit","demanda","souffla","répondit","murmura","cria","ajouta","lâcha","reprit","annonça"];
+const DIALOGUE_FRICTION_RE = /\b(non|mais|pourquoi|jamais|arrête|arrete|tu te fous|j['’]te)\b|\?/i;
+const DIALOGUE_BASCULE_RE = /\b(donc|alors|d['’]accord|ok|très bien|tres bien|j['’]y vais|on fait ça|on fait ca)\b/i;
+const DIALOGUE_SORTIE_RE = /\?|\b(partir|revenir|dire|prévenir|prevenir|jure|promets|vais\s+[a-zà-öø-ÿ]+)/i;
+
 
 // Seuils par niveau (v2 sévère)
 const LEVEL = {
@@ -985,6 +1009,56 @@ function computeMetrics(raw){
   // Paragraphes / mur de texte
   const wallText = (paras.length === 1 && words >= 160);
 
+  // Dialogues (précision)
+  const dLines = text.split(/\n+/).map((line, idx)=>({line, idx})).filter(x=>x.line.trim());
+  const quoteFrEv = findAllWithEvidence(text, /«[^»\n]{1,220}»/g, 18);
+  const quoteStdEv = findAllWithEvidence(text, /"[^"\n]{1,220}"/g, 18);
+  const replByDash = dLines.filter(x=>/^\s*[—-]\s*[A-ZÀ-ÖØ-Ý]/.test(x.line));
+  const replByFr = dLines.filter(x=>/«[^»\n]{1,220}»/.test(x.line));
+  const replByStd = dLines.filter(x=>/"[^"\n]{1,220}"/.test(x.line));
+  const repSet = new Set([...replByDash, ...replByFr, ...replByStd].map(x=>x.idx));
+  const repIdx = Array.from(repSet).sort((a,b)=>a-b);
+  const replLines = repIdx.map(i=>dLines.find(x=>x.idx===i)?.line || "").filter(Boolean);
+  const nbRepliques = replLines.length;
+  const longestRep = replLines.reduce((mx,l)=>Math.max(mx, tokenize(l).length), 0);
+  const dialogueWords = replLines.reduce((a,l)=>a+tokenize(l).length,0);
+  const ratioDialogue = words ? dialogueWords / words : 0;
+  const nbIncises = dLines.reduce((a,x)=> a + DIALOGUE_INCISORS.reduce((k,v)=>k+countOccurrences(x.line.toLowerCase(), v),0), 0);
+
+  const dashStarts = dLines.filter(x=>/^\s*[—-]\s*/.test(x.line));
+  const dashMajOk = dashStarts.filter(x=>/^\s*[—-]\s*[A-ZÀ-ÖØ-Ý]/.test(x.line)).length;
+  const dashMajRatio = dashStarts.length ? dashMajOk / dashStarts.length : 1;
+  const inciseOk = dLines.filter(x=>/[",]\s*(dit|demanda|souffla|répondit|murmura|cria|ajouta|lâcha|reprit|annonça)\b/i.test(x.line)).length;
+  const inciseRatio = nbIncises ? clamp01(inciseOk / nbIncises) : 1;
+  const frOpen = (text.match(/«/g)||[]).length;
+  const frClose = (text.match(/»/g)||[]).length;
+  const stdQuotes = (text.match(/"/g)||[]).length;
+  const quoteBalanced = (frOpen===frClose) && (stdQuotes%2===0);
+
+  const firstThreeRep = replLines.slice(0,3).join(" ").toLowerCase();
+  const friction = DIALOGUE_FRICTION_RE.test(firstThreeRep);
+  const afterFriction = friction ? replLines.slice(1).join(" ").toLowerCase() : "";
+  const bascule = friction && DIALOGUE_BASCULE_RE.test(afterFriction);
+  const lastRep = (replLines[replLines.length-1] || "").toLowerCase();
+  const sortie = DIALOGUE_SORTIE_RE.test(lastRep);
+
+  const dialogueEvidence = {
+    replByDash: replByDash.slice(0,8).map(x=>mkEvidence(text, text.indexOf(x.line), text.indexOf(x.line)+x.line.length)),
+    replByFr: quoteFrEv,
+    replByStd: quoteStdEv,
+    friction: friction ? quoteFrEv.slice(0,1).concat(quoteStdEv.slice(0,1)).concat(replByDash.slice(0,1).map(x=>mkEvidence(text, text.indexOf(x.line), text.indexOf(x.line)+x.line.length))).slice(0,1) : [],
+    bascule: bascule ? findAllWithEvidence(text, DIALOGUE_BASCULE_RE, 2) : [],
+    sortie: sortie && replLines.length ? [mkEvidence(text, Math.max(0, text.lastIndexOf(replLines[replLines.length-1])), Math.max(0, text.lastIndexOf(replLines[replLines.length-1])) + replLines[replLines.length-1].length)] : [],
+    quoteIssue: quoteBalanced ? [] : firstEvidence(text)
+  };
+
+  const dialogue = {
+    nbRepliques, longestRep, ratioDialogue, nbIncises,
+    dashMajRatio, inciseRatio, quoteBalanced,
+    friction, bascule, sortie,
+    evidence: dialogueEvidence
+  };
+
   return {
     text, lower, paras, sents, tokens, words,
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
@@ -994,6 +1068,7 @@ function computeMetrics(raw){
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
     offsetMap: {kind:"normalized_identity", length:text.length},
     timeHits, placeHits, connCount, turnsCount, actionPairs,
+    dialogue,
     internalHits, povBias, jeCount, ilCount,
     lightHits, sensesHits, sensesCovered, nonVisualCovered,
     vagueCount, ticsCount, wallText
@@ -1507,7 +1582,12 @@ function splitThirds(lower){
 }
 
 
-function parseDialogueInfo(raw){
+function parseDialogueInfo(raw, m){
+  if(m?.dialogue){
+    const d = m.dialogue;
+    const punctRatio = (d.dashMajRatio + d.inciseRatio + (d.quoteBalanced?1:0)) / 3;
+    return {count:d.nbRepliques, punctRatio, friction:d.friction, bascule:d.bascule, sortie:d.sortie, ratioDialogue:d.ratioDialogue, longestRep:d.longestRep, quoteBalanced:d.quoteBalanced, evidence:d.evidence||{}};
+  }
   const text = raw || "";
   const lines = text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
   const repl = [];
@@ -1515,13 +1595,15 @@ function parseDialogueInfo(raw){
     if(/^[-—]\s*/.test(l) || /^["«]/.test(l) || /["»]$/.test(l)) repl.push(l);
   }
   const firstThree = repl.slice(0,3).join(" ").toLowerCase();
-  const friction = /\b(ne|pas|jamais|rien|non|pourquoi|comment|mais|pourtant)\b|\?/i.test(firstThree);
+  const friction = DIALOGUE_FRICTION_RE.test(firstThree);
   const punctGood = repl.filter(l=>/[.!?…"]\s*$/.test(l)).length;
   const punctRatio = repl.length ? (punctGood/repl.length) : 0;
   const last = (repl[repl.length-1] || "").toLowerCase();
-  const sortie = /\?|\b(promis|promesse|jure|sinon|menace|tu verras|on verra|je reviendrai)\b/.test(last);
-  return {count: repl.length, punctRatio, friction, sortie};
+  const bascule = friction && DIALOGUE_BASCULE_RE.test(repl.slice(1).join(" ").toLowerCase());
+  const sortie = DIALOGUE_SORTIE_RE.test(last);
+  return {count: repl.length, punctRatio, friction, bascule, sortie, ratioDialogue:0, longestRep:0, quoteBalanced:true, evidence:{}};
 }
+
 
 function scoreRubric50(level, m, p1, p2, p3, fin){
   const {gates} = computeGates(m, level);
@@ -1566,8 +1648,22 @@ function scoreRubric50(level, m, p1, p2, p3, fin){
     }
   }
 
+  const dialogueInfo = parseDialogueInfo(m.text, m);
+  const dialogueTrace = [];
+  let dialogueGain = 0;
+  if(dialogueInfo.count >= 2){ dialogueGain += 1.5; dialogueTrace.push(traceItem("rubric50","dialogue_count", +1.5, `Dialogues présents (${dialogueInfo.count} répliques).`, (dialogueInfo.evidence?.replByDash||[]).concat(dialogueInfo.evidence?.replByFr||[]).concat(dialogueInfo.evidence?.replByStd||[]).slice(0,2))); }
+  else if((m.dialogue?.nbIncises || 0) >= 1){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_missing_markers", -0.8, "Dialogue probable sans marquage clair (tirets/guillemets).", firstEvidence(m.text))); }
+  if(dialogueInfo.punctRatio >= 0.66){ dialogueGain += 1.0; dialogueTrace.push(traceItem("rubric50","dialogue_punct", +1.0, "Ponctuation dialoguée globalement saine.")); }
+  else if(dialogueInfo.count >= 2){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_punct", -0.8, "Ponctuation/dialogues fragiles (tirets/majuscules/incises/guillemets).", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
+  if(dialogueInfo.friction){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_friction", +0.8, "Friction détectée tôt dans l'échange.", dialogueInfo.evidence?.friction||[])); }
+  if(dialogueInfo.bascule){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_bascule", +0.8, "Bascule dialoguée détectée.", dialogueInfo.evidence?.bascule||[])); }
+  if(dialogueInfo.sortie){ dialogueGain += 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_sortie", +0.9, "Sortie de dialogue avec décision/tension.", dialogueInfo.evidence?.sortie||[])); }
+  if(!dialogueInfo.quoteBalanced){ dialogueGain -= 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.9, "Guillemets non équilibrés.", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
+  dialogueGain = clamp(dialogueGain, 0, 5);
+  modules.dialogues.score += dialogueGain;
+  modules.dialogues.traceIds.push(...dialogueTrace.map(x=>x.ruleId));
+
   // métriques d'appoint pour modules peu couverts
-  modules.dialogues.score += clamp((parseDialogueInfo(m.text).count>=2?2.5:0),0,2.5);
   modules.temps_lieu.score += clamp((m.timeHits>0?1.8:0)+(m.placeHits>0?1.8:0)+(m.connCount>=2?0.8:0),0,4);
   modules.description.score += clamp((m.nonVisualCovered>=1?1.0:0)+(m.sensesCovered>=3?1.0:0),0,2);
   modules.cohesion.score += clamp((m.repeatsNear.length===0?1.0:0.3)+(m.top3Share<=0.34?1.0:0.4),0,3);
@@ -1590,7 +1686,7 @@ function scoreRubric50(level, m, p1, p2, p3, fin){
     `Gates actives: ${Object.keys(gates).filter(k=>gates[k]).join(', ') || 'aucune'}`
   ];
 
-  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes};
+  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes, trace: dialogueTrace};
 }
 
 
@@ -1666,6 +1762,12 @@ function buildFinal(m, p1, p2, level, raw){
   if(gates.timePlaceGate){
     final = Math.min(final, 14.0);
     audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
+  }
+
+  if((m.dialogue?.nbRepliques || 0) >= 3 && (m.dialogue?.dashMajRatio || 0) >= 0.75 && p1.parts.pseg < 2.0){
+    const before = final;
+    final = Math.min(20, roundToHalf(final + 0.5));
+    if(final > before) audit.push("Ajustement dialogue : segmentation dialoguée saine, malus langue atténué (+0,5). ");
   }
 
   const score20_capped = final;
@@ -1762,7 +1864,7 @@ Objectif mesurable :
     return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
   }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
 
-  const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])];
+  const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[]), ...(rubric50.trace||[])];
   if(gates.noEndPunct) mergedTrace.push(traceItem("final","cap_no_end_punct", 0, "Plafond final noEndPunct.", firstEvidence(m.text)));
   if(gates.tooShort) mergedTrace.push(traceItem("final","cap_too_short", 0, "Plafond final tooShort.", firstEvidence(m.text)));
   if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
@@ -2295,6 +2397,16 @@ Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • c
 Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée ${(fin.calib50?.score ?? fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 
   document.getElementById("contentProbe").textContent = probe;
+
+  const d = m.dialogue || {};
+  const dr = document.getElementById("dialogueReport");
+  if(dr){
+    dr.textContent = `Répliques: ${d.nbRepliques||0} • plus longue: ${d.longestRep||0} mots • ratio dialogue: ${(((d.ratioDialogue||0)*100).toFixed(1))}%
+` +
+      `Incises: ${d.nbIncises||0} • Majuscule après tiret: ${Math.round((d.dashMajRatio||0)*100)}% • Guillemets équilibrés: ${(d.quoteBalanced?"oui":"non")}
+` +
+      `Friction: ${(d.friction?"oui":"non")} • Bascule: ${(d.bascule?"oui":"non")} • Sortie: ${(d.sortie?"oui":"non")}`;
+  }
   renderHistory();
 }
 
