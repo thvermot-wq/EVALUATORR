@@ -326,6 +326,7 @@
       <div class="box" style="margin-top:10px">
         <div class="lab">Note /50 (barème collège)</div>
         <div class="val" id="finalScore50">—</div>
+        <div class="bar"><div id="finalBar50"></div></div>
         <div class="small" id="final50Hint">9 modules natifs (charte collège)</div>
         <div class="row" style="margin-top:8px">
           <label for="teacherScore50">Note prof finale (/50)</label>
@@ -711,6 +712,16 @@ const LEVEL = {
     idealAvgMin: 11, idealAvgMax: 19
   }
 };
+
+const GATE_CAPS_50 = {
+  noEndPunct: {cap50:24, reason:"Aucune ponctuation de fin de phrase"},
+  tooShort: {cap50ByLevel:{"5e":32,"4e":30,"3e":28}, reason:"Texte trop court"},
+  paragraphGate: {cap50:35, reason:"Segmentation insuffisante"},
+  sensesGate: {cap50:35, reason:"Sensoriel insuffisant"},
+  timePlaceGate: {cap50:35, reason:"Repères temps/lieu manquants"},
+  wallTextGate: {cap50:36, reason:"Mur de texte"}
+};
+
 
 /* ========= Metrics (v2.3 patched) ========= */
 function computeMetrics(raw){
@@ -1400,122 +1411,86 @@ function parseDialogueInfo(raw){
   return {count: repl.length, punctRatio, friction, sortie};
 }
 
-function scoreRubric50(state){
-  const {level, raw, m, p1, p2, p3} = state;
-  const modules = {};
-  const caps = [];
+function scoreRubric50(level, m, p1, p2, p3, fin){
   const {gates} = computeGates(m, level);
+  const trace = fin?.trace || [...(p1?.trace||[]), ...(p2?.trace||[]), ...(p3?.trace||[])];
 
-  function mod(name,max){ modules[name]={score:0,max,auditLines:[],alerts:[]}; return modules[name]; }
+  const weights = {
+    langue:15, narration:6, description:6, dialogues:5, style:5,
+    temps_lieu:4, lexique:4, cohesion:3, coherence:2
+  };
 
-  const narr = mod("narration",6);
-  let ns = 0;
-  if(m.turnsCount>=1) ns += 1.8;
-  if(m.actionPairs>=Math.max(1,Math.floor((m.sents.length||3)/3))) ns += 1.8;
-  if(/\b(je décide|j'ai décidé|coût|prix|perdu|sacrifi|bless|risque|peur)\b/i.test(m.lower)) ns += 1.2;
-  if(/\b(d'abord|ensuite|puis|finalement|à la fin)\b/i.test(m.lower)) ns += 1.2;
-  narr.score = clamp(roundToHalf(ns),0,6);
-  narr.auditLines.push(`Progression/tournants=${m.turnsCount}, actions=${m.actionPairs}.`);
+  const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[]}]));
 
-  const desc = mod("description",6);
-  const sHits = DESC_STRUCTURE.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
-  const iHits = DESC_INVENTAIRE.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
-  const dHits = DESC_DERANGEMENT.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
-  const trio = (sHits>0 && iHits>0 && dHits>0);
-  let ds = trio ? 4.2 : (sHits>0 && iHits>0 ? 2.8 : 1.4);
-  if(m.nonVisualCovered>=1) ds += 1.0;
-  if(m.sensesCovered>=3) ds += 0.8;
-  desc.score = clamp(roundToHalf(ds),0,6);
-  desc.auditLines.push(`Trio structure/objet/dérangement: ${trio?"oui":"non"} (${sHits}/${iHits}/${dHits}).`);
-  if(!trio) desc.alerts.push("Trio descriptif incomplet.");
+  function add(module, traceItemObj, gain){
+    if(!modules[module]) return;
+    modules[module].score += gain;
+    modules[module].traceIds.push(traceItemObj.ruleId);
+  }
 
-  const dia = mod("dialogues",5);
-  const di = parseDialogueInfo(raw || m.text);
-  let dsc = 0;
-  if(di.count>=2) dsc += 2.0;
-  if(di.count>=4) dsc += 1.0;
-  if(di.punctRatio>=0.8) dsc += 1.0;
-  else if(di.count>0) dsc += 0.4;
-  if(di.friction) dsc += 0.6;
-  if(di.sortie) dsc += 0.4;
-  dia.score = clamp(roundToHalf(dsc),0,5);
-  dia.auditLines.push(`Répliques=${di.count}, friction tôt=${di.friction?"oui":"non"}, sortie=${di.sortie?"oui":"non"}.`);
-  if(di.count===0) dia.alerts.push("Pas de dialogue détecté.");
+  for(const t of trace){
+    if(t.module === "pass1"){
+      if(t.ruleId === "pseg") add("langue", t, (t.delta/3)*5);
+      if(t.ruleId === "syn") add("langue", t, (t.delta/2)*4);
+      if(t.ruleId === "ortho") add("langue", t, (t.delta/2.5)*4);
+      if(t.ruleId === "lex") add("lexique", t, (t.delta/2.5)*4);
+      if(t.ruleId.startsWith("confusion_")) add("langue", t, t.delta*0.25);
+    }
+    if(t.module === "pass2"){
+      if(t.ruleId === "theme") add("narration", t, (t.delta/1.5)*2.5);
+      if(t.ruleId === "coh") add("coherence", t, (t.delta/2.5)*2);
+      if(t.ruleId === "pov") add("narration", t, (t.delta/1.5)*1.5);
+      if(t.ruleId === "ld") add("style", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "sens") add("description", t, (t.delta/2.0)*3.5);
+      if(t.ruleId === "interest") add("narration", t, (t.delta/1.5)*2);
+      if(t.ruleId === "gate_time_place") add("temps_lieu", t, -1.2);
+      if(t.ruleId === "gate_senses") add("description", t, -1.2);
+    }
+    if(t.module === "pass3"){
+      if(t.ruleId === "ending") add("style", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "motifs") add("cohesion", t, (t.delta/1.0)*1.5);
+      if(t.ruleId === "scene") add("dialogues", t, (t.delta/1.0)*2.5);
+      if(t.ruleId === "disabled") add("style", t, -0.5);
+    }
+  }
 
-  const style = mod("styleGeneral",5);
-  const antiHits = TICS_ANTIGEN.map(p=>({p, n:(m.text.match(p.re)||[]).length})).filter(x=>x.n>0);
-  let ss = 3.0;
-  if(m.vagueCount<=2) ss += 1.0; else ss -= 0.8;
-  if(p3?.parts?.ending>=0.6) ss += 0.8;
-  ss -= Math.min(2.0, antiHits.reduce((a,x)=>a+x.n,0)*0.4);
-  if((m.ticsCount||0)>=3) ss -= 0.7;
-  style.score = clamp(roundToHalf(ss),0,5);
-  style.auditLines.push(`Tics=${m.ticsCount}, anti-patterns=${antiHits.reduce((a,x)=>a+x.n,0)}.`);
-  for(const h of antiHits) style.alerts.push(`${h.p.hint} (x${h.n})`);
+  // métriques d'appoint pour modules peu couverts
+  modules.dialogues.score += clamp((parseDialogueInfo(m.text).count>=2?2.5:0),0,2.5);
+  modules.temps_lieu.score += clamp((m.timeHits>0?1.8:0)+(m.placeHits>0?1.8:0)+(m.connCount>=2?0.8:0),0,4);
+  modules.description.score += clamp((m.nonVisualCovered>=1?1.0:0)+(m.sensesCovered>=3?1.0:0),0,2);
+  modules.cohesion.score += clamp((m.repeatsNear.length===0?1.0:0.3)+(m.top3Share<=0.34?1.0:0.4),0,3);
 
-  const tl = mod("tempsLieu",4);
-  let tls = 0;
-  if(m.timeHits>=1) tls += 1.5;
-  if(m.placeHits>=1) tls += 1.5;
-  if(m.connCount>=2) tls += 1.0;
-  tl.score = clamp(roundToHalf(tls),0,4);
-  tl.auditLines.push(`Temps=${m.timeHits}, lieu=${m.placeHits}, connecteurs=${m.connCount}.`);
+  for(const v of Object.values(modules)){
+    v.score = roundToHalf(clamp(v.score, 0, v.max));
+  }
 
-  const lex = mod("locutionLexique",4);
-  let lxs = 0;
-  if(m.mattr >= (LEVEL[level]?.mattrOk||0.4)) lxs += 1.5;
-  if(m.top1Share <= (LEVEL[level]?.maxTopWordShare||0.07)) lxs += 1.0;
-  if(m.connCount>=2) lxs += 0.7;
-  if(m.hapaxRatio>=0.45) lxs += 0.8;
-  if(m.vagueCount>=4) lxs -= 0.8;
-  lex.score = clamp(roundToHalf(lxs),0,4);
-  lex.auditLines.push(`MATTR=${m.mattr.toFixed(2)}, top1=${(m.top1Share*100).toFixed(1)}%, vague=${m.vagueCount}.`);
+  let score50 = roundToHalf(Object.values(modules).reduce((a,x)=>a+x.score,0));
+  const caps50 = [];
+  for(const [gate,conf] of Object.entries(GATE_CAPS_50)){
+    if(!gates?.[gate]) continue;
+    const cap50 = conf.cap50ByLevel ? conf.cap50ByLevel[level] : conf.cap50;
+    caps50.push({gate, cap50, reason: conf.reason});
+    score50 = Math.min(score50, cap50);
+  }
 
-  const cohesion = mod("cohesion",3);
-  const pron = (m.lower.match(/\b(il|elle|ils|elles|lui|leur|eux)\b/g)||[]).length;
-  const named = (m.text.match(/\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g)||[]).length;
-  const nearRep = (m.repeatsNear||[]).reduce((a,[,n])=>a+n,0);
-  let chs = 0.8;
-  if(pron>0 && named>0 && pron/named <= 2.5) chs += 1.2;
-  if((m.top3Share||0)<=0.34) chs += 0.6;
-  if(nearRep<=3) chs += 0.4; else chs -= 0.4;
-  if(pron>=8 && named<=1) chs -= 0.7;
-  cohesion.score = clamp(roundToHalf(chs),0,3);
-  cohesion.auditLines.push(`Pronoms=${pron}, noms propres≈${named}, near-repeats=${nearRep}.`);
+  const notes = [
+    `Trace utilisée: ${trace.length} items`,
+    `Gates actives: ${Object.keys(gates).filter(k=>gates[k]).join(', ') || 'aucune'}`
+  ];
 
-  const coherence = mod("coherence",2);
-  const hasClosure = /(\bfinalement\b|\bà la fin\b|\benfin\b|\bdésormais\b)/.test(m.lower);
-  const consequence = CONSEQUENCE_MARKERS.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
-  let cos = 0.4;
-  if(m.turnsCount>=1) cos += 0.5;
-  if(m.actionPairs>=1) cos += 0.5;
-  if(hasClosure) cos += 0.3;
-  if(consequence>=1) cos += 0.3;
-  coherence.score = clamp(roundToHalf(cos),0,2);
-  coherence.auditLines.push(`Bascule=${m.turnsCount}, conséquences=${consequence}, clôture=${hasClosure?"oui":"non"}.`);
-
-  const langue = mod("langue",15);
-  let ls = 7.5 + (p1.score*0.7);
-  if(m.aposBad===0) ls += 1.5; else ls -= Math.min(2.5, m.aposBad*0.5);
-  if((m.confusionTotal||0)===0) ls += 1.5; else ls -= Math.min(2.5, (m.confusionTotal||0)*0.4);
-  if((m.suspectTotal||0)<=2) ls += 1.5; else ls -= Math.min(3, (m.suspectTotal||0)*0.25);
-  if((m.endPunctAny||0)===0) ls = Math.min(ls, 6);
-  langue.score = clamp(roundToHalf(ls),0,15);
-  langue.auditLines.push(`Passe1=${p1.score}/10, apostrophes=${m.aposBad}, confusions=${m.confusionTotal||0}, suspects=${m.suspectTotal||0}.`);
-
-  if(gates.noEndPunct) caps.push({rule:"noEndPunct", cap50:24, reason:"Aucune ponctuation de fin de phrase"});
-  if(gates.tooShort) caps.push({rule:"tooShort", cap50:(level==="3e"?28:level==="4e"?30:32), reason:"Texte trop court"});
-  if(gates.paragraphGate) caps.push({rule:"paragraphGate", cap50:35, reason:"Segmentation insuffisante"});
-  if(gates.sensesGate) caps.push({rule:"sensesGate", cap50:35, reason:"Sensoriel insuffisant"});
-  if(gates.timePlaceGate) caps.push({rule:"timePlaceGate", cap50:35, reason:"Repères temps/lieu manquants"});
-
-  const totalRaw = Object.values(modules).reduce((a,x)=>a+x.score,0);
-  let score50 = roundToHalf(clamp(totalRaw,0,50));
-  for(const c of caps) score50 = Math.min(score50, c.cap50);
-
-  return {score50, modules, caps};
+  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes};
 }
 
+
+
+
+function diagnoseRubricModule(moduleName, moduleState, trace){
+  const ids = moduleState?.traceIds || [];
+  const picked = ids.map(id => (trace||[]).find(t=>t.ruleId===id)).find(Boolean);
+  if(picked?.message) return picked.message;
+  if((moduleState?.score ?? 0) >= ((moduleState?.max ?? 0) * 0.6)) return "Plutôt solide.";
+  return "À renforcer.";
+}
 
 
 /* ========= Finale /20 + commentaires ========= */
@@ -1524,7 +1499,7 @@ function buildFinal(m, p1, p2, level, raw){
   const alerts = [];
   const {L, gates} = computeGates(m, level);
   const p3 = scorePass3(m, level, p1, p2);
-  const rubric50 = scoreRubric50({level, raw, m, p1, p2, p3, fin:null});
+  const rubric50 = scoreRubric50(level, m, p1, p2, p3, {trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
   const calib50 = computeCalibrated50(level, rubric50.score50, gates);
 
   audit.push("— Passe 1 (forme) —");
@@ -1535,9 +1510,9 @@ function buildFinal(m, p1, p2, level, raw){
   audit.push(...p3.audit);
   audit.push("— Barème /50 (modules) —");
   for(const [k,v] of Object.entries(rubric50.modules)){
-    audit.push(`${k}: ${v.score}/${v.max} — ${(v.auditLines && v.auditLines[0]) || "—"}`);
+    audit.push(`${k}: ${v.score}/${v.max} — ${diagnoseRubricModule(k, v, [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])])}`);
   }
-  for(const c of rubric50.caps){ audit.push(`Plafond /50 : ${c.reason} ⇒ ≤ ${c.cap50}/50.`); }
+  for(const c of (rubric50.caps50||[])){ audit.push(`Plafond /50 : ${c.reason} ⇒ ≤ ${c.cap50}/50.`); }
   audit.push(`Calibration /50 : ${calib50.enabled?"ON":"OFF"} (deltaMean=${calib50.deltaMean>=0?"+":""}${calib50.deltaMean.toFixed(2)}, n=${calib50.n}) => ${calib50.score.toFixed(1)}/50.`);
   alerts.push(...p1.alerts, ...p2.alerts);
   for(const mod of Object.values(rubric50.modules)){
@@ -1970,7 +1945,6 @@ function learnCalibration(level, toolScore50, teacherScore50){
 }
 
 
-
 /* ========= Exports ========= */
 function downloadFile(filename, content, mime){
   const blob = new Blob([content], {type: mime});
@@ -2045,7 +2019,7 @@ function exportCSV(state){
   const gates = Object.entries(fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|");
   const topWord = (m.topWords[0]?.[0] ?? "");
   const header = [
-    "timestamp","student","level","final20","final50","final50Cal","deltaMean50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_tempsLieu","mod_locutionLexique","mod_cohesion","mod_coherence",
+    "timestamp","student","level","final20","final50","final50Cal","deltaMean50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_temps_lieu","mod_lexique","mod_cohesion","mod_coherence",
     "words","sentences","paragraphs",
     "endPunct","avgSent","sdSent","mattr","hapaxRatio","top1Share","topWord","suspects","aposBad","confusions",
     "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
@@ -2053,8 +2027,8 @@ function exportCSV(state){
   const row = [
     new Date().toISOString(), student, level, fin.final, (fin.rubric50?.score50 ?? 0), (fin.calib50?.score ?? fin.rubric50?.score50 ?? 0), (fin.calib50?.deltaMean ?? 0), p1.score, p2.score,
     fin.rubric50?.modules?.langue?.score ?? 0, fin.rubric50?.modules?.narration?.score ?? 0, fin.rubric50?.modules?.description?.score ?? 0,
-    fin.rubric50?.modules?.dialogues?.score ?? 0, fin.rubric50?.modules?.styleGeneral?.score ?? 0, fin.rubric50?.modules?.tempsLieu?.score ?? 0,
-    fin.rubric50?.modules?.locutionLexique?.score ?? 0, fin.rubric50?.modules?.cohesion?.score ?? 0, fin.rubric50?.modules?.coherence?.score ?? 0,
+    fin.rubric50?.modules?.dialogues?.score ?? 0, fin.rubric50?.modules?.style?.score ?? 0, fin.rubric50?.modules?.temps_lieu?.score ?? 0,
+    fin.rubric50?.modules?.lexique?.score ?? 0, fin.rubric50?.modules?.cohesion?.score ?? 0, fin.rubric50?.modules?.coherence?.score ?? 0,
     m.words, m.sents.length, m.paras.length,
     m.endPunct, m.avgSent.toFixed(2), m.sdSent.toFixed(2), m.mattr.toFixed(4), m.hapaxRatio.toFixed(4),
     m.top1Share.toFixed(4), topWord, m.suspectTotal, m.aposBad, m.confusionTotal,
@@ -2126,9 +2100,11 @@ document.getElementById("passScores").textContent =
   document.getElementById("finalScore50").textContent = calOn
     ? `${raw50.toFixed(1)}/50 → calibrée ${cal50.toFixed(1)}/50`
     : `${raw50.toFixed(1)}/50`;
-  const capLabel = (fin.rubric50?.caps || []).map(c=>`≤${c.cap50}`).join(", ") || "aucun plafond";
+  const capLabel = (fin.rubric50?.caps50 || []).map(c=>`≤${c.cap50}`).join(", ") || "aucun plafond";
   const dm = fin.calib50?.deltaMean ?? 0;
-  document.getElementById("final50Hint").textContent = `Calibration ${calOn?"ON":"OFF"} (Δmoy=${dm>=0?"+":""}${dm.toFixed(2)}, n=${fin.calib50?.n ?? 0}) • ${(fin.rubric50?.caps||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
+  document.getElementById("final50Hint").textContent = `Calibration ${calOn?"ON":"OFF"} (Δmoy=${dm>=0?"+":""}${dm.toFixed(2)}, n=${fin.calib50?.n ?? 0}) • ${(fin.rubric50?.caps50||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
+  const pct50 = clamp01((fin.rubric50?.score50 ?? 0)/50)*100;
+  const b50 = document.getElementById("finalBar50"); if(b50) b50.style.width = pct50.toFixed(1)+"%";
 
   const pct = clamp01(fin.final/20) * 100;
   document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
@@ -2136,12 +2112,12 @@ document.getElementById("passScores").textContent =
   const tbody = document.querySelector("#rubricTable tbody");
   if(tbody){
     const labels = {
-      narration:"Narration", description:"Description", dialogues:"Dialogues", styleGeneral:"Style général",
-      tempsLieu:"Temps/Lieu", locutionLexique:"Locution/Lexique", cohesion:"Cohésion", coherence:"Cohérence", langue:"Langue"
+      narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style",
+      temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence", langue:"Langue"
     };
     const list = fin.rubric50?.modules || {};
     tbody.innerHTML = Object.entries(list).map(([k,v])=>{
-      const keyLine = (v.auditLines && v.auditLines[0]) || "—";
+      const keyLine = diagnoseRubricModule(k, v, fin.trace || []);
       return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
     }).join("") || `<tr><td colspan="3">—</td></tr>`;
   }
