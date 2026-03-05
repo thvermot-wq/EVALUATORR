@@ -409,6 +409,12 @@
           <ul class="list" id="auditList"></ul>
         </details>
       </div>
+      <div style="margin-top:10px">
+        <details>
+          <summary>Pourquoi cette note ?</summary>
+          <div class="out" id="traceBox">—</div>
+        </details>
+      </div>
 
       <div style="margin-top:10px">
         <details>
@@ -506,6 +512,25 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
 }
 function roundToHalf(x){ return Math.round(x*2)/2; }
+
+/** @typedef {{start:number,end:number,excerpt:string}} Evidence */
+/** @typedef {{module:string,ruleId:string,delta:number,message:string,evidence?:Evidence[]}} TraceItem */
+function mkEvidence(text, start=0, end=0, radius=70){
+  const t = String(text||"");
+  const a = clamp(start-radius, 0, Math.max(0, t.length-1));
+  const b = clamp((end||start)+radius, 0, t.length);
+  return {start, end, excerpt: t.slice(a,b).trim()};
+}
+function firstEvidence(text){
+  const t = String(text||"");
+  return [mkEvidence(t, 0, Math.min(t.length, 80))];
+}
+function traceItem(module, ruleId, delta, message, evidence=[]){
+  return {module, ruleId, delta:Number(delta.toFixed(2)), message, evidence};
+}
+function traceToAudit(trace){
+  return (trace||[]).map(t=>`${t.module}/${t.ruleId} ${t.delta>=0?"+":""}${t.delta.toFixed(2)} : ${t.message}`);
+}
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 function clamp01(x){ return clamp(x, 0, 1); }
 function mean(arr){ return arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : 0; }
@@ -888,6 +913,7 @@ function computeGates(m, level){
    - Lexique (2.5)
 */
 function scorePass1(m, level){
+  const trace = [];
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
@@ -1065,16 +1091,28 @@ function scorePass1(m, level){
 
   // pénalité “trop court”
   if(gates.tooShort){
+    const before = pass1;
     pass1 = Math.min(pass1, 4.5);
     audit.push(`PASS1 cap : texte trop court (<${L.minWords} mots) ⇒ Passe 1 ≤ 4,5/10.`);
+    trace.push(traceItem("pass1","cap_too_short", pass1-before, `Plafond passe1 texte court (${L.minWords} mots).`, firstEvidence(m.text)));
   }
   // pénalité “pas de ponctuation”
   if(gates.noEndPunct){
+    const before = pass1;
     pass1 = Math.min(pass1, 3.5);
     audit.push("PASS1 cap : aucune fin de phrase (.!?) ⇒ Passe 1 ≤ 3,5/10.");
+    trace.push(traceItem("pass1","cap_no_end_punct", pass1-before, "Plafond passe1 sans ponctuation de fin.", firstEvidence(m.text)));
   }
 
-  return {score: roundToHalf(clamp(pass1, 0, 10)), audit, alerts, parts:{pseg, syn, ortho, lex}, gates};
+  trace.push(traceItem("pass1","pseg", pseg, "Ponctuation & segmentation."));
+  trace.push(traceItem("pass1","syn", syn, "Syntaxe et rythme."));
+  trace.push(traceItem("pass1","ortho", ortho, "Orthographe / grammaire."));
+  trace.push(traceItem("pass1","lex", lex, "Lexique / répétitions / tics."));
+  for(const c of (m.confusionHits||[])){
+    trace.push(traceItem("pass1", `confusion_${c.name}`, -0.1*c.n, `${c.name} détecté (${c.n}).`, firstEvidence(m.text)));
+  }
+
+  return {score: roundToHalf(clamp(pass1, 0, 10)), audit: traceToAudit(trace), alerts, parts:{pseg, syn, ortho, lex}, gates, trace};
 }
 
 /* ========= PASS 2 : “subjectif mais nécessaire” /10 (v2 sévère) =========
@@ -1087,6 +1125,7 @@ function scorePass1(m, level){
    - Intérêt (1.5) via tournants + choix + actions
 */
 function scorePass2(m, level){
+  const trace = [];
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
@@ -1223,7 +1262,16 @@ function scorePass2(m, level){
     audit.push("PASS2 cap : sensoriel insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
 
-  return {score: roundToHalf(clamp(pass2, 0, 10)), audit, alerts, parts:{theme, coh, pov, ld, sens, interest}, gates};
+  trace.push(traceItem("pass2","theme", theme, "Tenue des thèmes."));
+  trace.push(traceItem("pass2","coh", coh, "Cohérence récit."));
+  trace.push(traceItem("pass2","pov", pov, "Point de vue interne."));
+  trace.push(traceItem("pass2","ld", ld, "Lumière/ombre."));
+  trace.push(traceItem("pass2","sens", sens, "5 sens et non-visuels."));
+  trace.push(traceItem("pass2","interest", interest, "Intérêt narratif."));
+  if(gates.timePlaceGate) trace.push(traceItem("pass2","gate_time_place", -0.5, "Repères temps/lieu insuffisants.", firstEvidence(m.text)));
+  if(gates.sensesGate) trace.push(traceItem("pass2","gate_senses", -0.5, "Sensoriel insuffisant.", firstEvidence(m.text)));
+  if(gates.tooShort) trace.push(traceItem("pass2","gate_too_short", -0.5, "Texte trop court.", firstEvidence(m.text)));
+  return {score: roundToHalf(clamp(pass2, 0, 10)), audit: traceToAudit(trace), alerts, parts:{theme, coh, pov, ld, sens, interest}, gates, trace};
 }
 
 /* ========= PASS 3 : Excellence /3 (bonus haut niveau) =========
@@ -1233,6 +1281,7 @@ function scorePass2(m, level){
    - Scène (actions + perceptions + réactions) (1.0)
 */
 function scorePass3(m, level, p1, p2){
+  const trace = [];
   const audit = [];
   const alerts = [];
 
@@ -1241,7 +1290,8 @@ function scorePass3(m, level, p1, p2){
 
   if(!formOK){
     audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
-    return {score: 0, audit, alerts, parts:{ending:0, motifs:0, scene:0}};
+    trace.push(traceItem("pass3","disabled",0,"Excellence désactivée (forme insuffisante).", firstEvidence(m.text)));
+    return {score: 0, audit: traceToAudit(trace), alerts, parts:{ending:0, motifs:0, scene:0}, trace};
   }
 
   // --- 1) Fin maîtrisée /1
@@ -1315,7 +1365,10 @@ function scorePass3(m, level, p1, p2){
   audit.push(`EXC-SCÈNE (${scene.toFixed(1)}/1) : actions=${ap}, non-visuels=${senseNV}, POV=${pov}.`);
 
   const score = roundToHalf(ending + motifs + scene); // /3
-  return {score, audit, alerts, parts:{ending, motifs, scene}};
+  trace.push(traceItem("pass3","ending", ending, "Fin maîtrisée."));
+  trace.push(traceItem("pass3","motifs", motifs, "Motifs tenus."));
+  trace.push(traceItem("pass3","scene", scene, "Scène (actions+perceptions)."));
+  return {score, audit: traceToAudit(trace), alerts, parts:{ending, motifs, scene}, trace};
 }
 
 // petit helper : découper le texte en tiers
@@ -1503,7 +1556,7 @@ function buildFinal(m, p1, p2, level, raw){
 
   // Score pondéré /20
   let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
-
+  const score20_raw = final;
 
   // Hard gates (plafonds)
   if(gates.noEndPunct){
@@ -1527,6 +1580,8 @@ function buildFinal(m, p1, p2, level, raw){
     final = Math.min(final, 14.0);
     audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
   }
+
+  const score20_capped = final;
 
   // Verdict
   let verdict = "";
@@ -1620,7 +1675,13 @@ Objectif mesurable :
     return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
   }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
 
-  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50};
+  const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])];
+  if(gates.noEndPunct) mergedTrace.push(traceItem("final","cap_no_end_punct", 0, "Plafond final noEndPunct.", firstEvidence(m.text)));
+  if(gates.tooShort) mergedTrace.push(traceItem("final","cap_too_short", 0, "Plafond final tooShort.", firstEvidence(m.text)));
+  if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
+  if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
+
+  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50, trace: mergedTrace};
 
 }
 
@@ -1909,6 +1970,7 @@ function learnCalibration(level, toolScore50, teacherScore50){
 }
 
 
+
 /* ========= Exports ========= */
 function downloadFile(filename, content, mime){
   const blob = new Blob([content], {type: mime});
@@ -1934,7 +1996,7 @@ function makePayload(state){
     thresholds: fin.levelCfg,
     pass1: { score10: p1.score, parts: p1.parts },
     pass2: { score10: p2.score, parts: p2.parts },
-    final: { score20: fin.final, score50: fin.rubric50?.score50 ?? 0, score50Calibrated: fin.calib50?.score ?? fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
+    final: { score20: fin.final, score20_raw: fin.score20_raw, score20_capped: fin.score20_capped, score50: fin.rubric50?.score50 ?? 0, score50Calibrated: fin.calib50?.score ?? fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
     rubric50: fin.rubric50,
     metrics: {
       words: m.words,
@@ -1969,6 +2031,7 @@ function makePayload(state){
     },
     audit: fin.audit,
     comment: fin.comment,
+    trace: fin.trace || [],
     ai: fin.ai || null
   };
 }
@@ -2089,6 +2152,19 @@ document.getElementById("passScores").textContent =
     const li = document.createElement("li");
     li.textContent = line;
     ul.appendChild(li);
+  }
+
+  const traceBox = document.getElementById("traceBox");
+  if(traceBox){
+    const lines = [...(fin.trace||[])].sort((a,b)=>{
+      if(a.module!==b.module) return a.module.localeCompare(b.module);
+      if(a.delta!==b.delta) return a.delta-b.delta;
+      return a.ruleId.localeCompare(b.ruleId);
+    }).map(t=>{
+      const ev = (t.evidence||[]).slice(0,2).map(e=>`    ↳ [${e.start}-${e.end}] ${e.excerpt}`).join("\n");
+      return `${t.delta>=0?"+":""}${t.delta.toFixed(1)} • ${t.module}/${t.ruleId} — ${t.message}${ev?"\n"+ev:""}`;
+    });
+    traceBox.textContent = lines.length ? lines.join("\n") : "—";
   }
 
   document.getElementById("alerts").innerHTML = fin.alertHtml;
