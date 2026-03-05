@@ -1778,6 +1778,173 @@ function learnCalibration(level, toolScore50, teacherScore50){
 
 
 
+const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
+
+function loadAICfg(){
+  try{
+    const raw = localStorage.getItem(AI_CFG_KEY);
+    const base = {mode:"OFF", endpoint:"", saveInHistory:false};
+    if(!raw) return base;
+    const p = JSON.parse(raw);
+    return {
+      mode: ["OFF","AUTO","ONLINE"].includes(p?.mode) ? p.mode : "OFF",
+      endpoint: String(p?.endpoint || ""),
+      saveInHistory: !!p?.saveInHistory
+    };
+  } catch { return {mode:"OFF", endpoint:"", saveInHistory:false}; }
+}
+function saveAICfg(cfg){
+  localStorage.setItem(AI_CFG_KEY, JSON.stringify({
+    mode: cfg.mode,
+    endpoint: cfg.endpoint,
+    saveInHistory: !!cfg.saveInHistory
+  }));
+}
+function shouldUseAI(mode){
+  if(mode === "ONLINE") return true;
+  if(mode === "AUTO") return !!navigator.onLine;
+  return false;
+}
+function buildAIPayload(level, raw, m, fin){
+  return {
+    tool: "EVALUATORR",
+    level,
+    text: raw,
+    local: {
+      score50: fin.rubric50?.score50 ?? 0,
+      modules9: fin.rubric50?.modules || {},
+      gates: fin.gates || {},
+      keyMetrics: {
+        words: m.words,
+        sentences: m.sents.length,
+        paragraphs: m.paras.length,
+        timeHits: m.timeHits,
+        placeHits: m.placeHits,
+        sensesCovered: m.sensesCovered,
+        nonVisualCovered: m.nonVisualCovered,
+        turnsCount: m.turnsCount,
+        actionPairs: m.actionPairs
+      }
+    },
+    wanted: {jsonSchemaVersion:"1"}
+  };
+}
+async function fetchAIReport(endpoint, payload, timeoutMs=12000){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), timeoutMs);
+  try{
+    const res = await fetch(endpoint, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    });
+    const txt = await res.text();
+    let data = null;
+    try{ data = JSON.parse(txt); } catch { data = {raw: txt}; }
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    return {ok:true, data};
+  } catch(e){
+    return {ok:false, error: e?.message || "Erreur réseau"};
+  } finally { clearTimeout(t); }
+}
+function renderAIBox(obj){
+  const box = document.getElementById("aiDiag");
+  if(!box) return;
+  if(!obj){ box.textContent = "—"; return; }
+  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
+  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
+  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
+  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  box.textContent = `Diagnostic IA
+${fmt(diag)}
+
+Conseils prioritaires
+${fmt(conseils)}
+
+Réécritures ciblées (2)
+${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
+
+Appréciation bulletin (optionnel)
+${app || "—"}`;
+}
+const CALIB_KEY = "evaluator_v2_calibration_v1";
+const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
+
+function defaultCalibrationStore(){
+  return {
+    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
+  };
+}
+function loadCalibration(){
+  try{
+    const raw = localStorage.getItem(CALIB_KEY);
+    if(!raw) return defaultCalibrationStore();
+    const parsed = JSON.parse(raw);
+    const base = defaultCalibrationStore();
+    for(const lv of ["5e","4e","3e"]){
+      const p = parsed?.[lv] || {};
+      base[lv] = {
+        n: Number(p.n || 0),
+        deltaMean: Number(p.deltaMean || 0),
+        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
+        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
+      };
+    }
+    return base;
+  } catch { return defaultCalibrationStore(); }
+}
+function saveCalibration(data){
+  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
+}
+function getGateCap50(level, gates){
+  let cap = 50;
+  if(gates?.noEndPunct) cap = Math.min(cap, 24);
+  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
+  if(gates?.paragraphGate) cap = Math.min(cap, 35);
+  if(gates?.sensesGate) cap = Math.min(cap, 35);
+  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
+  return cap;
+}
+function isCalibrationEnabled(){
+  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
+}
+function setCalibrationEnabled(v){
+  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
+}
+function computeCalibrated50(level, rawScore50, gates){
+  const enabled = isCalibrationEnabled();
+  const store = loadCalibration();
+  const profile = store[level] || defaultCalibrationStore()[level];
+  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
+  const cap = getGateCap50(level, gates || {});
+  const score = roundToHalf(Math.min(adjusted, cap));
+  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
+}
+function learnCalibration(level, toolScore50, teacherScore50){
+  const store = loadCalibration();
+  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
+  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
+  const rawDelta = teacherScore50 - toolScore50;
+  const delta = clamp(rawDelta, -clampMax, clampMax);
+  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
+  last.push(Number(delta.toFixed(3)));
+  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
+  store[level] = {
+    n: Number(prof.n || 0) + 1,
+    deltaMean: Number(deltaMean.toFixed(3)),
+    lastDeltas: last,
+    clampMax
+  };
+  saveCalibration(store);
+  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
+}
+
+
+
 const CALIB_KEY = "evaluator_v2_calibration_v1";
 const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
 

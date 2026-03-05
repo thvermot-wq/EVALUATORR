@@ -1,0 +1,13 @@
+name = "evaluatorr-correct-worker"
+main = "src/index.js"
+compatibility_date = "2026-03-05"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[vars]
+# Optionnel: remplacez par votre domaine GitHub Pages exact (ex: https://thvermot-wq.github.io)
+GITHUB_PAGES_ORIGIN = ""
+MAX_PAYLOAD_BYTES = "12000"
+RATE_LIMIT_PER_MIN = "30"
