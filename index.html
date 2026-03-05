@@ -573,6 +573,8 @@ function categoryFromTraceItem(t){
   if(!t) return "langue";
   if(t.ruleId.startsWith("confusion_") || ["ortho","syn","pseg","cap_no_end_punct"].includes(t.ruleId)) return "langue";
   if(["scene","dialogue_count","dialogue_punct","dialogue_friction","dialogue_bascule","dialogue_sortie","dialogue_quotes_unbalanced","dialogue_missing_markers"].includes(t.ruleId)) return "dialogues";
+  if(["desc_trio","desc_trio_missing","desc_non_visual","desc_non_visual_low","desc_inventory"].includes(t.ruleId)) return "description";
+  if(["time_place_anchor","time_place_missing","time_place_moves"].includes(t.ruleId)) return "temps_lieu";
   if(["gate_time_place","cap_time_place"].includes(t.ruleId)) return "temps_lieu";
   if(["sens","gate_senses","cap_senses"].includes(t.ruleId)) return "senses";
   if(["motifs","coh"].includes(t.ruleId)) return "cohesion";
@@ -784,6 +786,19 @@ const SENSES = {
   toucher: ["froid","chaud","tiède","peau","main","rugueux","lisse","humide","sec","collait","glacé","poignée"],
   gout: ["goût","amer","acide","salé","sucré","mordre","langue"]
 };
+
+
+const SENSE_DETAIL = {
+  tactile: ["rugueux","lisse","collant","poisseux","sec","humide","mouillé","tiède","glacé","froid","chaud","brûlant","piquant","poussiéreux","doux","dur","mou","serré","pression","gratter","frisson","tremblement","main","peau","poignée","paume","doigts","érafler","tirer","frotter"],
+  olfactif: ["odeur","parfum","puanteur","moisi","fumée","âcre","rance","renfermé","essence","savon","javel","café","pain grillé","transpiration","humidite","poussière","métal","brûlé","odeur forte","ça sent","sentait","respirer","nez","narines","relent","air lourd","air froid","air chaud","fumet","parfume"],
+  sonore: ["bruit","silence","grincement","craquement","claquement","cliquetis","sifflement","bourdonnement","souffle","pas","voix","chuchotement","murmure","cri","sonnerie","porte qui claque","frapper","cogner","vibrer","écho","grésiller","respiration","toux","rire","pleurs","hurlement","grondement","tic-tac","frottement","raclement"],
+  thermique: ["froid","chaud","tiède","glacial","gelé","brûlant","bouillant","frisson","grelotter","sueur","transpirer","moite","courant d'air","air froid","air chaud","température","thermique","fraîcheur","chaleur","geler","réchauffer","chauffage","radiateur","buée","vent froid","vent chaud","peau froide","peau chaude","engourdi","picotement"]
+};
+const DESC_STRUCTURE_PLUS = ["porte","couloir","plafond","marche","mur","carrelage","fenêtre","escalier","palier","seuil","entrée","sortie","grille","portail","cour","classe","tableau","étagère","placard","tiroir","coin","angle","sol","dalle","rampe","colonne","toit","poutre","chambre","cuisine","salon","hall","vitrine","banc","quai","rue","trottoir","immeuble","cave","grenier"];
+const DESC_OBJET_PLUS = ["sac","chaise","table","cahier","veste","stylo","trousse","feuille","livre","classeur","gomme","règle","portable","clé","enveloppe","boîte","bouteille","gourde","lampe","chaussure","cartable","casquette","écharpe","gants","pull","manteau","badge","photo","billet","ticket","balai","seau","cadenas","télécommande","chargeur","masque","casier","agenda","compas","ciseaux"];
+const DESC_DERANGEMENT_PLUS = ["fissure","tache","bruit sec","odeur","trace","froid","chaleur","cassé","renversé","fendu","brisé","manquait","disparu","anormal","désordre","poussière","grincement","fuite","goutte","clignote","bloqué","coincé","déchiré","rayé","collant","humide","sombre","lumière éteinte","clé tordue","porte ouverte","porte forcée","papier froissé","marque","empreinte","boue","sang","alarme","silence bizarre","trou","verre cassé"];
+const MOVE_VERBS = ["aller","venir","entrer","sortir","monter","descendre","traverser","passer","courir","marcher","avancer","reculer","tourner","revenir","partir","s'approcher","s’éloigner","contourner","franchir","remonter","redescendre"];
+const MOVE_PREPS = ["vers","jusqu'à","jusqu’à","à travers","dans","hors de","depuis","jusque","sur","sous","entre","au fond","devant","derrière"];
 
 // Détection “orthographe / grammaire” fréquente (heuristiques)
 const APOS_BAD = [
@@ -997,7 +1012,27 @@ function computeMetrics(raw){
     gout: SENSES.gout.reduce((a,w)=>a+countOccurrences(lower, w), 0),
   };
   const sensesCovered = Object.values(sensesHits).filter(v=>v>0).length;
-  const nonVisualCovered = [sensesHits.ouie, sensesHits.odorat, sensesHits.toucher, sensesHits.gout].filter(v=>v>0).length;
+  function collectWordHits(words, limit=3){
+    const hits = [];
+    let count = 0;
+    const seen = new Set();
+    for(const w of words){
+      const n = countOccurrences(lower, w);
+      count += n;
+      if(n>0 && hits.length < limit && !seen.has(w)){
+        const i = lower.indexOf(w);
+        if(i>=0){ hits.push(mkEvidence(text, i, i+w.length)); seen.add(w); }
+      }
+    }
+    return {count, hits};
+  }
+  const senseDetailHits = {
+    tactile: collectWordHits(SENSE_DETAIL.tactile, 3),
+    olfactif: collectWordHits(SENSE_DETAIL.olfactif, 3),
+    sonore: collectWordHits(SENSE_DETAIL.sonore, 3),
+    thermique: collectWordHits(SENSE_DETAIL.thermique, 3)
+  };
+  const nonVisualCovered = [senseDetailHits.olfactif.count, senseDetailHits.tactile.count, senseDetailHits.sonore.count].filter(v=>v>0).length;
 
   // Vague/tics
   const vagueCount = VAGUES.reduce((a,w)=>a+countOccurrences(lower, w), 0);
@@ -1059,6 +1094,16 @@ function computeMetrics(raw){
     evidence: dialogueEvidence
   };
 
+  const descStructure = collectWordHits(DESC_STRUCTURE_PLUS, 3);
+  const descObjet = collectWordHits(DESC_OBJET_PLUS, 3);
+  const descDerangement = collectWordHits(DESC_DERANGEMENT_PLUS, 3);
+  const descTrioCovered = (descStructure.count >= 1 && descObjet.count >= 1 && descDerangement.count >= 1);
+  const nounGuess = (text.match(/\b[a-zà-öø-ÿ]{3,}(tion|age|ure|oir|eur|euse|ment|té|ette|ier|ière|isme|ence|ance)\b/gi) || []).length + (descStructure.count + descObjet.count);
+  const verbGuess = (text.match(/\b[a-zà-öø-ÿ]{3,}(er|ir|re|ez|ons|ent|ait|aient|é|ée|és|ées)\b/gi) || []).length;
+  const moveVerbEv = findAllWithEvidence(text, /\b(all|vien|entr|sort|mont|descend|travers|pass|cour|march|avanc|recul|tourn|reven|part|approch|éloign|contourn|franch|remont|redescend)[a-zà-öø-ÿ]*\b/gi, 3);
+  const moveVerbHits = {count: moveVerbEv.length, hits: moveVerbEv};
+  const movePrepHits = collectWordHits(MOVE_PREPS, 3);
+
   return {
     text, lower, paras, sents, tokens, words,
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
@@ -1069,6 +1114,26 @@ function computeMetrics(raw){
     offsetMap: {kind:"normalized_identity", length:text.length},
     timeHits, placeHits, connCount, turnsCount, actionPairs,
     dialogue,
+    desc: {
+      structure: descStructure,
+      objet: descObjet,
+      derangement: descDerangement,
+      trioCovered: descTrioCovered,
+      verbNounRatio: nounGuess ? (verbGuess / nounGuess) : 0,
+      nonVisualCoreCovered: nonVisualCovered,
+      evidence: {
+        structure: descStructure.hits,
+        objet: descObjet.hits,
+        derangement: descDerangement.hits,
+        nonVisual: [...senseDetailHits.olfactif.hits, ...senseDetailHits.tactile.hits, ...senseDetailHits.sonore.hits].slice(0,3)
+      }
+    },
+    movement: {
+      verbs: moveVerbHits,
+      preps: movePrepHits,
+      readableMoves: (moveVerbHits.count >= 1 && movePrepHits.count >= 1),
+      evidence: [...moveVerbHits.hits, ...movePrepHits.hits].slice(0,3)
+    },
     internalHits, povBias, jeCount, ilCount,
     lightHits, sensesHits, sensesCovered, nonVisualCovered,
     vagueCount, ticsCount, wallText
@@ -1663,9 +1728,50 @@ function scoreRubric50(level, m, p1, p2, p3, fin){
   modules.dialogues.score += dialogueGain;
   modules.dialogues.traceIds.push(...dialogueTrace.map(x=>x.ruleId));
 
+  const descTrace = [];
+  let descGain = 0;
+  if(m.desc?.trioCovered){
+    descGain += 2.2;
+    descTrace.push(traceItem("rubric50","desc_trio", +2.2, "Description ancrée : structure + objet + dérangement présents.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,3)));
+  } else {
+    descGain -= 1.0;
+    descTrace.push(traceItem("rubric50","desc_trio_missing", -1.0, "Description incomplète : trio structure/objet/dérangement non couvert.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,2)));
+  }
+  if((m.desc?.nonVisualCoreCovered || 0) >= 2){
+    descGain += 1.8;
+    descTrace.push(traceItem("rubric50","desc_non_visual", +1.8, "Sens non-visuels bien mobilisés (olfactif/tactile/sonore).", m.desc?.evidence?.nonVisual || []));
+  } else {
+    descGain -= 0.8;
+    descTrace.push(traceItem("rubric50","desc_non_visual_low", -0.8, "Sens non-visuels insuffisants pour ancrer la scène.", m.desc?.evidence?.nonVisual || firstEvidence(m.text)));
+  }
+  if((m.desc?.verbNounRatio || 0) < 0.55){
+    descGain -= 0.9;
+    descTrace.push(traceItem("rubric50","desc_inventory", -0.9, "Description trop en inventaire (noms >> verbes d'action).", [...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.structure||[])].slice(0,2)));
+  } else {
+    descGain += 0.6;
+  }
+  modules.description.score += clamp(descGain, 0, 6);
+  modules.description.traceIds.push(...descTrace.map(x=>x.ruleId));
+
+  const tlTrace = [];
+  let tlGain = 0;
+  if(m.timeHits>=1 && m.placeHits>=1){
+    tlGain += 2.4;
+    tlTrace.push(traceItem("rubric50","time_place_anchor", +2.4, "Ancrages temps et lieu détectés.", firstEvidence(m.text)));
+  } else {
+    tlGain -= 1.2;
+    tlTrace.push(traceItem("rubric50","time_place_missing", -1.2, "Temps ou lieu manquant : narration dans le vide.", firstEvidence(m.text)));
+  }
+  if(m.movement?.readableMoves){
+    tlGain += 1.2;
+    tlTrace.push(traceItem("rubric50","time_place_moves", +1.2, "Déplacements lisibles (prépositions + verbes de mouvement).", m.movement?.evidence || []));
+  } else {
+    tlGain -= 0.6;
+  }
+  modules.temps_lieu.score += clamp(tlGain, 0, 4);
+  modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
+
   // métriques d'appoint pour modules peu couverts
-  modules.temps_lieu.score += clamp((m.timeHits>0?1.8:0)+(m.placeHits>0?1.8:0)+(m.connCount>=2?0.8:0),0,4);
-  modules.description.score += clamp((m.nonVisualCovered>=1?1.0:0)+(m.sensesCovered>=3?1.0:0),0,2);
   modules.cohesion.score += clamp((m.repeatsNear.length===0?1.0:0.3)+(m.top3Share<=0.34?1.0:0.4),0,3);
 
   for(const v of Object.values(modules)){
@@ -1686,7 +1792,7 @@ function scoreRubric50(level, m, p1, p2, p3, fin){
     `Gates actives: ${Object.keys(gates).filter(k=>gates[k]).join(', ') || 'aucune'}`
   ];
 
-  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes, trace: dialogueTrace};
+  return {score50: roundToHalf(clamp(score50,0,50)), modules, caps50, notes, trace: [...dialogueTrace, ...descTrace, ...tlTrace]};
 }
 
 
