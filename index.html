@@ -2018,6 +2018,7 @@ function saveHistory(arr){
 function renderHistory(){
   const box = document.getElementById("historyBox");
   const info = document.getElementById("histInfo");
+  if(!box || !info) return;
   const arr = loadHistory();
   info.textContent = `${arr.length} entrée(s)`;
   if(!arr.length){
@@ -2112,8 +2113,9 @@ Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée $
 
 /* ========= Actions ========= */
 const elText = document.getElementById("text");
-const status = document.getElementById("status");
-function setStatus(s){ status.textContent = s; }
+const status = document.getElementById("status") || {textContent:""};
+function setStatus(s){ if(status) status.textContent = s; }
+function bindEvt(id, evt, fn){ const el = document.getElementById(id); if(el) el.addEventListener(evt, fn); }
 
 const calToggle = document.getElementById("toggleCalibration");
 if(calToggle) calToggle.checked = isCalibrationEnabled();
@@ -2131,9 +2133,9 @@ function persistAICfgFromUI(){
     saveInHistory: !!saveAIHistoryEl?.checked
   });
 }
-aiModeEl?.addEventListener("change", persistAICfgFromUI);
-aiEndpointEl?.addEventListener("change", persistAICfgFromUI);
-saveAIHistoryEl?.addEventListener("change", persistAICfgFromUI);
+if(aiModeEl) aiModeEl.addEventListener("change", persistAICfgFromUI);
+if(aiEndpointEl) aiEndpointEl.addEventListener("change", persistAICfgFromUI);
+if(saveAIHistoryEl) saveAIHistoryEl.addEventListener("change", persistAICfgFromUI);
 
 
 function runLocalEvaluation(raw, level){
@@ -2147,7 +2149,7 @@ function runLocalEvaluation(raw, level){
   return window.__last;
 }
 
-document.getElementById("btnEval").addEventListener("click", ()=>{
+bindEvt("btnEval","click", ()=>{
   try{
     document.getElementById("errBox").style.display = "none";
     const raw = normalizeText(elText.value);
@@ -2248,12 +2250,12 @@ document.getElementById("toggleCalibration")?.addEventListener("change", (e)=>{
   setStatus(`Calibration ${e.target.checked?"activée":"désactivée"}.`);
 });
 
-document.getElementById("btnClear").addEventListener("click", ()=>{
+bindEvt("btnClear","click", ()=>{
   elText.value = "";
   setStatus("Effacé.");
 });
 
-document.getElementById("btnExample").addEventListener("click", ()=>{
+bindEvt("btnExample","click", ()=>{
   // Exemple volontairement “bon” mais pas parfait : v2 doit rester exigeant
   elText.value =
 `Je suis rentré tard, et la pluie avait laissé une odeur de goudron chaud sur le trottoir. Dans l’entrée, le plafonnier clignotait : une lumière jaune, mal assurée.
@@ -2263,7 +2265,7 @@ Je suis resté sur le seuil. Je me suis dit que si j’entrais, quelque chose me
   setStatus("Exemple inséré.");
 });
 
-document.getElementById("btnCopy").addEventListener("click", async ()=>{
+bindEvt("btnCopy","click", async ()=>{
   const txt = document.getElementById("comment").textContent || "";
   if(!txt || txt === "—") return;
   try{
@@ -2274,14 +2276,14 @@ document.getElementById("btnCopy").addEventListener("click", async ()=>{
   }
 });
 
-document.getElementById("btnExportTxt").addEventListener("click", ()=>{
+bindEvt("btnExportTxt","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   downloadFile("evaluator_v2_commentaire.txt", last.fin.comment + "\n", "text/plain;charset=utf-8");
   setStatus("TXT exporté.");
 });
 
-document.getElementById("btnExportJson").addEventListener("click", ()=>{
+bindEvt("btnExportJson","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const payload = makePayload(last);
@@ -2289,14 +2291,14 @@ document.getElementById("btnExportJson").addEventListener("click", ()=>{
   setStatus("JSON exporté.");
 });
 
-document.getElementById("btnExportCsv").addEventListener("click", ()=>{
+bindEvt("btnExportCsv","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   exportCSV(last);
   setStatus("CSV exporté.");
 });
 
-document.getElementById("btnSave").addEventListener("click", ()=>{
+bindEvt("btnSave","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const student = (document.getElementById("student").value || "").trim();
@@ -2322,7 +2324,7 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
   setStatus("Entrée sauvegardée.");
 });
 
-document.getElementById("btnClearHistory").addEventListener("click", ()=>{
+bindEvt("btnClearHistory","click", ()=>{
   localStorage.removeItem(HIST_KEY);
   renderHistory();
   setStatus("Historique vidé.");
@@ -2345,11 +2347,11 @@ function showView(view){
   }
 }
 
-document.getElementById("goHome")?.addEventListener("click", ()=>showView("home"));
-document.getElementById("goApp")?.addEventListener("click",  ()=>showView("app"));
-document.getElementById("startBtn")?.addEventListener("click", ()=>showView("app"));
+bindEvt("goHome","click", ()=>showView("home"));
+bindEvt("goApp","click",  ()=>showView("app"));
+bindEvt("startBtn","click", ()=>showView("app"));
 
-document.getElementById("quickPasteBtn")?.addEventListener("click", ()=>{
+bindEvt("quickPasteBtn","click", ()=>{
   showView("app");
   const t = document.getElementById("text");
   if(!t) return;
