@@ -106,6 +106,9 @@
     .twoCol{display:grid; grid-template-columns: 1fr 1fr; gap:10px}
     @media (max-width: 980px){ .twoCol{grid-template-columns:1fr} }
     .mini{font-size:11px; color:var(--muted)}
+    .rubric-table{width:100%; border-collapse:collapse; font-size:12px; margin-top:8px}
+    .rubric-table th,.rubric-table td{border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; vertical-align:top}
+    .rubric-table th:last-child,.rubric-table td:last-child{text-align:right}
 
 /* ===== Accueil Evaluator ===== */
 .home-hero{ padding: 18px 16px; }
@@ -222,6 +225,7 @@
 
       <div class="row" style="margin-top:10px">
         <button class="btn" id="btnEval">Évaluer</button>
+        <button class="btn secondary" id="btnEvalAI">Évaluer + IA</button>
         <button class="btn secondary" id="btnExample">Exemple</button>
         <button class="btn danger" id="btnClear">Effacer</button>
         <span class="pill" id="status">Prêt.</span>
@@ -283,6 +287,24 @@
           </div>
           <span class="pill">v2 : seuils auto par niveau (modifiables dans le code)</span>
         </div>
+        <div class="row" style="margin-top:8px">
+          <div>
+            <label for="aiMode">Mode IA</label><br/>
+            <select id="aiMode">
+              <option value="OFF" selected>OFF</option>
+              <option value="AUTO">AUTO</option>
+              <option value="ONLINE">ONLINE</option>
+            </select>
+          </div>
+          <div>
+            <label for="aiEndpoint">aiEndpoint (URL)</label><br/>
+            <input id="aiEndpoint" type="text" placeholder="https://.../evaluate" style="width:300px" />
+          </div>
+          <button class="btn secondary" id="btnTestAI" type="button">Tester endpoint</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="saveAIHistory" type="checkbox" /> Sauver la réponse IA dans l’historique
+          </label>
+        </div>
       </div>
 
       <div class="hr"></div>
@@ -298,6 +320,26 @@
           <div class="lab">Scores des passes</div>
           <div class="val mono" id="passScores">—</div>
           <div class="small" id="passHint">Passe 1 /10 + Passe 2 /10 → pondération → /20</div>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top:10px">
+        <div class="lab">Note /50 (barème collège)</div>
+        <div class="val" id="finalScore50">—</div>
+        <div class="small" id="final50Hint">9 modules natifs (charte collège)</div>
+        <div class="row" style="margin-top:8px">
+          <label for="teacherScore50">Note prof finale (/50)</label>
+          <input id="teacherScore50" type="number" min="0" max="50" step="0.5" placeholder="ex: 31.5" style="width:120px" />
+          <button class="btn secondary" id="btnLearnCalibration" type="button">Apprendre (calibrer)</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="toggleCalibration" type="checkbox" checked /> Calibration ON/OFF
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme bon exemple</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="exampleAnonymize" type="checkbox" checked /> Anonymiser le texte
+          </label>
         </div>
       </div>
 
@@ -351,6 +393,18 @@
 
       <div style="margin-top:10px">
         <details open>
+          <summary>Barème /50 (modules)</summary>
+          <table class="rubric-table" id="rubricTable">
+            <thead>
+              <tr><th>Module</th><th>Phrase clé</th><th>Score</th></tr>
+            </thead>
+            <tbody><tr><td colspan="3">—</td></tr></tbody>
+          </table>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
           <summary>Audit (détails des points)</summary>
           <ul class="list" id="auditList"></ul>
         </details>
@@ -367,6 +421,21 @@
         <details>
           <summary>Indicateurs de contenu (Passe 2)</summary>
           <div class="out" id="contentProbe">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details>
+          <summary>Diagnostic IA</summary>
+          <div class="out" id="aiDiag">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Exemples proches (bibliothèque prof)</summary>
+          <div class="out" id="nearExamples">—</div>
+          <div class="out" id="suggestedTips" style="margin-top:8px">—</div>
         </details>
       </div>
 
@@ -535,6 +604,19 @@ const TIME_MARKERS = ["hier","demain","aujourd'hui","aujourd’hui","le lendemai
 const PLACE_MARKERS = ["dans la","dans le","dans un","au ","à la ","à l'","à l’","chez ","devant ","derrière ","près de","au fond","sur le","sous le","dans ma","dans mon"];
 const VAGUES = ["truc","chose","bizarre","chelou","trop","genre","machin","bidule","un peu","voilà","voila","bref"];
 const TICS = ["du coup","en fait","genre","bref","je sais pas","je ne sais pas","voilà","voila"];
+const TICS_ANTIGEN = [
+  {key:"rafale_pas", re:/\bpas\b[^.!?\n]{0,35}\bpas\b/gi, hint:"Rafale \"Pas… Pas…\" détectée."},
+  {key:"parce_que_cest_deja", re:/\bparce que c['’]est d[ée]j[àa]\b/gi, hint:"Tic \"parce que c'est déjà\"."},
+  {key:"juste_la_ou", re:/\bjuste\b[^.!?\n]{0,40}\bl[àa]\s+o[ùu]\b/gi, hint:"Construction \"juste..., là où...\" répétitive."},
+  {key:"nominal_double", re:/\b[a-zà-öø-ÿ]{2,}(?:\s+[a-zà-öø-ÿ]{2,}){0,2}\.?\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}(?:\s+[a-zà-öø-ÿ]{2,}){0,2}\./g, hint:"Phrases nominales d'effet en chaîne."},
+  {key:"para_like", re:/(?:^|\n\s*\n)\s*comme\b/gi, hint:"Paragraphe démarré par comparaison (\"Comme...\")."}
+];
+
+const DESC_STRUCTURE = ["au fond","au centre","à gauche","à droite","devant","derrière","au-dessus","au-dessous","sur la","sur le","dans le coin","aligné","rangé","empilé"];
+const DESC_INVENTAIRE = ["table","chaise","mur","sol","porte","fenêtre","étagère","boîte","sac","livre","lampe","écran","tiroir","couloir","placard","veste"];
+const DESC_DERANGEMENT = ["mais","pourtant","sauf que","soudain","cassé","renversé","fendu","trembl","brisé","tache","trace","disparu","manquait","anormal","désordre"];
+const NAMED_HINTS = ["m.","mme","monsieur","madame","nora","l[ée]a","adrien","mila","in[eè]s"];
+const CONSEQUENCE_MARKERS = ["donc","alors","du coup","par conséquent","de sorte que","si bien que","c'est pourquoi","c’est pourquoi"];
 
 const INTERNAL_POV = [
   "je pensais","je me suis dit","je me dis","je croyais","j'ai cru","j’ai cru","j'avais l'impression","j’avais l’impression",
@@ -1249,12 +1331,148 @@ function splitThirds(lower){
 }
 
 
+function parseDialogueInfo(raw){
+  const text = raw || "";
+  const lines = text.split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const repl = [];
+  for(const l of lines){
+    if(/^[-—]\s*/.test(l) || /^["«]/.test(l) || /["»]$/.test(l)) repl.push(l);
+  }
+  const firstThree = repl.slice(0,3).join(" ").toLowerCase();
+  const friction = /\b(ne|pas|jamais|rien|non|pourquoi|comment|mais|pourtant)\b|\?/i.test(firstThree);
+  const punctGood = repl.filter(l=>/[.!?…"]\s*$/.test(l)).length;
+  const punctRatio = repl.length ? (punctGood/repl.length) : 0;
+  const last = (repl[repl.length-1] || "").toLowerCase();
+  const sortie = /\?|\b(promis|promesse|jure|sinon|menace|tu verras|on verra|je reviendrai)\b/.test(last);
+  return {count: repl.length, punctRatio, friction, sortie};
+}
+
+function scoreRubric50(state){
+  const {level, raw, m, p1, p2, p3} = state;
+  const modules = {};
+  const caps = [];
+  const {gates} = computeGates(m, level);
+
+  function mod(name,max){ modules[name]={score:0,max,auditLines:[],alerts:[]}; return modules[name]; }
+
+  const narr = mod("narration",6);
+  let ns = 0;
+  if(m.turnsCount>=1) ns += 1.8;
+  if(m.actionPairs>=Math.max(1,Math.floor((m.sents.length||3)/3))) ns += 1.8;
+  if(/\b(je décide|j'ai décidé|coût|prix|perdu|sacrifi|bless|risque|peur)\b/i.test(m.lower)) ns += 1.2;
+  if(/\b(d'abord|ensuite|puis|finalement|à la fin)\b/i.test(m.lower)) ns += 1.2;
+  narr.score = clamp(roundToHalf(ns),0,6);
+  narr.auditLines.push(`Progression/tournants=${m.turnsCount}, actions=${m.actionPairs}.`);
+
+  const desc = mod("description",6);
+  const sHits = DESC_STRUCTURE.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
+  const iHits = DESC_INVENTAIRE.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
+  const dHits = DESC_DERANGEMENT.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
+  const trio = (sHits>0 && iHits>0 && dHits>0);
+  let ds = trio ? 4.2 : (sHits>0 && iHits>0 ? 2.8 : 1.4);
+  if(m.nonVisualCovered>=1) ds += 1.0;
+  if(m.sensesCovered>=3) ds += 0.8;
+  desc.score = clamp(roundToHalf(ds),0,6);
+  desc.auditLines.push(`Trio structure/objet/dérangement: ${trio?"oui":"non"} (${sHits}/${iHits}/${dHits}).`);
+  if(!trio) desc.alerts.push("Trio descriptif incomplet.");
+
+  const dia = mod("dialogues",5);
+  const di = parseDialogueInfo(raw || m.text);
+  let dsc = 0;
+  if(di.count>=2) dsc += 2.0;
+  if(di.count>=4) dsc += 1.0;
+  if(di.punctRatio>=0.8) dsc += 1.0;
+  else if(di.count>0) dsc += 0.4;
+  if(di.friction) dsc += 0.6;
+  if(di.sortie) dsc += 0.4;
+  dia.score = clamp(roundToHalf(dsc),0,5);
+  dia.auditLines.push(`Répliques=${di.count}, friction tôt=${di.friction?"oui":"non"}, sortie=${di.sortie?"oui":"non"}.`);
+  if(di.count===0) dia.alerts.push("Pas de dialogue détecté.");
+
+  const style = mod("styleGeneral",5);
+  const antiHits = TICS_ANTIGEN.map(p=>({p, n:(m.text.match(p.re)||[]).length})).filter(x=>x.n>0);
+  let ss = 3.0;
+  if(m.vagueCount<=2) ss += 1.0; else ss -= 0.8;
+  if(p3?.parts?.ending>=0.6) ss += 0.8;
+  ss -= Math.min(2.0, antiHits.reduce((a,x)=>a+x.n,0)*0.4);
+  if((m.ticsCount||0)>=3) ss -= 0.7;
+  style.score = clamp(roundToHalf(ss),0,5);
+  style.auditLines.push(`Tics=${m.ticsCount}, anti-patterns=${antiHits.reduce((a,x)=>a+x.n,0)}.`);
+  for(const h of antiHits) style.alerts.push(`${h.p.hint} (x${h.n})`);
+
+  const tl = mod("tempsLieu",4);
+  let tls = 0;
+  if(m.timeHits>=1) tls += 1.5;
+  if(m.placeHits>=1) tls += 1.5;
+  if(m.connCount>=2) tls += 1.0;
+  tl.score = clamp(roundToHalf(tls),0,4);
+  tl.auditLines.push(`Temps=${m.timeHits}, lieu=${m.placeHits}, connecteurs=${m.connCount}.`);
+
+  const lex = mod("locutionLexique",4);
+  let lxs = 0;
+  if(m.mattr >= (LEVEL[level]?.mattrOk||0.4)) lxs += 1.5;
+  if(m.top1Share <= (LEVEL[level]?.maxTopWordShare||0.07)) lxs += 1.0;
+  if(m.connCount>=2) lxs += 0.7;
+  if(m.hapaxRatio>=0.45) lxs += 0.8;
+  if(m.vagueCount>=4) lxs -= 0.8;
+  lex.score = clamp(roundToHalf(lxs),0,4);
+  lex.auditLines.push(`MATTR=${m.mattr.toFixed(2)}, top1=${(m.top1Share*100).toFixed(1)}%, vague=${m.vagueCount}.`);
+
+  const cohesion = mod("cohesion",3);
+  const pron = (m.lower.match(/\b(il|elle|ils|elles|lui|leur|eux)\b/g)||[]).length;
+  const named = (m.text.match(/\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g)||[]).length;
+  const nearRep = (m.repeatsNear||[]).reduce((a,[,n])=>a+n,0);
+  let chs = 0.8;
+  if(pron>0 && named>0 && pron/named <= 2.5) chs += 1.2;
+  if((m.top3Share||0)<=0.34) chs += 0.6;
+  if(nearRep<=3) chs += 0.4; else chs -= 0.4;
+  if(pron>=8 && named<=1) chs -= 0.7;
+  cohesion.score = clamp(roundToHalf(chs),0,3);
+  cohesion.auditLines.push(`Pronoms=${pron}, noms propres≈${named}, near-repeats=${nearRep}.`);
+
+  const coherence = mod("coherence",2);
+  const hasClosure = /(\bfinalement\b|\bà la fin\b|\benfin\b|\bdésormais\b)/.test(m.lower);
+  const consequence = CONSEQUENCE_MARKERS.reduce((a,w)=>a+countOccurrences(m.lower,w),0);
+  let cos = 0.4;
+  if(m.turnsCount>=1) cos += 0.5;
+  if(m.actionPairs>=1) cos += 0.5;
+  if(hasClosure) cos += 0.3;
+  if(consequence>=1) cos += 0.3;
+  coherence.score = clamp(roundToHalf(cos),0,2);
+  coherence.auditLines.push(`Bascule=${m.turnsCount}, conséquences=${consequence}, clôture=${hasClosure?"oui":"non"}.`);
+
+  const langue = mod("langue",15);
+  let ls = 7.5 + (p1.score*0.7);
+  if(m.aposBad===0) ls += 1.5; else ls -= Math.min(2.5, m.aposBad*0.5);
+  if((m.confusionTotal||0)===0) ls += 1.5; else ls -= Math.min(2.5, (m.confusionTotal||0)*0.4);
+  if((m.suspectTotal||0)<=2) ls += 1.5; else ls -= Math.min(3, (m.suspectTotal||0)*0.25);
+  if((m.endPunctAny||0)===0) ls = Math.min(ls, 6);
+  langue.score = clamp(roundToHalf(ls),0,15);
+  langue.auditLines.push(`Passe1=${p1.score}/10, apostrophes=${m.aposBad}, confusions=${m.confusionTotal||0}, suspects=${m.suspectTotal||0}.`);
+
+  if(gates.noEndPunct) caps.push({rule:"noEndPunct", cap50:24, reason:"Aucune ponctuation de fin de phrase"});
+  if(gates.tooShort) caps.push({rule:"tooShort", cap50:(level==="3e"?28:level==="4e"?30:32), reason:"Texte trop court"});
+  if(gates.paragraphGate) caps.push({rule:"paragraphGate", cap50:35, reason:"Segmentation insuffisante"});
+  if(gates.sensesGate) caps.push({rule:"sensesGate", cap50:35, reason:"Sensoriel insuffisant"});
+  if(gates.timePlaceGate) caps.push({rule:"timePlaceGate", cap50:35, reason:"Repères temps/lieu manquants"});
+
+  const totalRaw = Object.values(modules).reduce((a,x)=>a+x.score,0);
+  let score50 = roundToHalf(clamp(totalRaw,0,50));
+  for(const c of caps) score50 = Math.min(score50, c.cap50);
+
+  return {score50, modules, caps};
+}
+
+
+
 /* ========= Finale /20 + commentaires ========= */
-function buildFinal(m, p1, p2, level){
+function buildFinal(m, p1, p2, level, raw){
   const audit = [];
   const alerts = [];
   const {L, gates} = computeGates(m, level);
   const p3 = scorePass3(m, level, p1, p2);
+  const rubric50 = scoreRubric50({level, raw, m, p1, p2, p3, fin:null});
+  const calib50 = computeCalibrated50(level, rubric50.score50, gates);
 
   audit.push("— Passe 1 (forme) —");
   audit.push(...p1.audit);
@@ -1262,7 +1480,16 @@ function buildFinal(m, p1, p2, level){
   audit.push(...p2.audit);
   audit.push("— Passe 3 (excellence) —");
   audit.push(...p3.audit);
+  audit.push("— Barème /50 (modules) —");
+  for(const [k,v] of Object.entries(rubric50.modules)){
+    audit.push(`${k}: ${v.score}/${v.max} — ${(v.auditLines && v.auditLines[0]) || "—"}`);
+  }
+  for(const c of rubric50.caps){ audit.push(`Plafond /50 : ${c.reason} ⇒ ≤ ${c.cap50}/50.`); }
+  audit.push(`Calibration /50 : ${calib50.enabled?"ON":"OFF"} (deltaMean=${calib50.deltaMean>=0?"+":""}${calib50.deltaMean.toFixed(2)}, n=${calib50.n}) => ${calib50.score.toFixed(1)}/50.`);
   alerts.push(...p1.alerts, ...p2.alerts);
+  for(const mod of Object.values(rubric50.modules)){
+    for(const a of (mod.alerts||[])) alerts.push({lvl:"warn", t:`/50 ${a}`});
+  }
 
   // Poids : v2 recommande un ajustement par niveau (on écrase légèrement l’UI si incohérent)
   let w1 = Number(document.getElementById("w1").value || 0.55);
@@ -1393,9 +1620,294 @@ Objectif mesurable :
     return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
   }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
 
-  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3};
+  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50};
 
 }
+
+
+const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
+const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
+const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
+
+function textHash32(str){
+  let h = 5381;
+  for(let i=0;i<str.length;i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
+function activeGateList(gates){
+  return Object.entries(gates || {}).filter(([,v])=>!!v).map(([k])=>k);
+}
+function loadAIReviews(){
+  try{ const raw=localStorage.getItem(AI_REVIEW_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveAIReviews(arr){ localStorage.setItem(AI_REVIEW_KEY, JSON.stringify(arr.slice(-120))); }
+function storeAIReview(level, raw, m, fin, aiData){
+  const rec = {
+    ts: new Date().toISOString(),
+    level,
+    textHash: textHash32(raw || ""),
+    score50: fin?.rubric50?.score50 ?? 0,
+    modules: fin?.rubric50?.modules || {},
+    gates: activeGateList(fin?.gates || {}),
+    topWords: (m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    aiReview: aiData || null
+  };
+  const arr=loadAIReviews(); arr.push(rec); saveAIReviews(arr);
+}
+
+function loadExampleLibrary(){
+  try{ const raw=localStorage.getItem(EXAMPLE_LIB_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveExampleLibrary(arr){ localStorage.setItem(EXAMPLE_LIB_KEY, JSON.stringify(arr.slice(-400))); }
+function anonymizeExampleText(raw){
+  const lines=(raw||"").split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const trimmed=lines.join(" ").slice(0,900);
+  return trimmed
+    .replace(/\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g, "[NOM]")
+    .replace(/\b\d{1,2}[hH]\d{0,2}\b/g,"[HEURE]")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g,"[DATE]");
+}
+function extractAdviceFromState(state){
+  const out=[];
+  const comment=String(state?.fin?.comment||"");
+  for(const line of comment.split(/\n+/)){
+    const t=line.trim();
+    if(t.startsWith("- ")) out.push(t.slice(2));
+  }
+  const ai = state?.fin?.ai;
+  if(ai?.priorities && Array.isArray(ai.priorities)){
+    for(const p of ai.priorities){
+      if(p?.do_next) out.push(String(p.do_next));
+      else if(typeof p === 'string') out.push(p);
+    }
+  }
+  return [...new Set(out.filter(Boolean))].slice(0,8);
+}
+function addGoodExampleFromState(state, options={}){
+  const raw = state?.raw || state?.m?.text || "";
+  const advice = extractAdviceFromState(state);
+  const ex = {
+    ts: new Date().toISOString(),
+    level: state.level,
+    textHash: textHash32(raw),
+    text: options.anonymize ? anonymizeExampleText(raw) : String(raw).slice(0,900),
+    score50: state?.fin?.rubric50?.score50 ?? 0,
+    modules: state?.fin?.rubric50?.modules || {},
+    gates: activeGateList(state?.fin?.gates || {}),
+    topWords: (state?.m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    audit: (state?.fin?.audit||[]).slice(-12),
+    advice
+  };
+  const lib=loadExampleLibrary();
+  lib.push(ex);
+  saveExampleLibrary(lib);
+  return ex;
+}
+function findNearExamples(state, maxN=3){
+  const lib=loadExampleLibrary();
+  const curWords = new Set((state?.m?.topWords||[]).slice(0,8).map(x=>x[0]));
+  const curGates = new Set(activeGateList(state?.fin?.gates || {}));
+  const level=state?.level;
+  const scored = lib.map(e=>{
+    const ew = new Set(e.topWords||[]);
+    const eg = new Set(e.gates||[]);
+    let overlap=0; for(const w of curWords){ if(ew.has(w)) overlap++; }
+    let gateMatch=0; for(const g of curGates){ if(eg.has(g)) gateMatch++; }
+    const levelBonus = e.level===level ? 2 : 0;
+    const score = overlap*2 + gateMatch*3 + levelBonus;
+    return {e, simScore: score, overlap, gateMatch};
+  }).filter(x=>x.simScore>0).sort((a,b)=>b.simScore-a.simScore).slice(0,maxN);
+
+  const advice=[];
+  for(const s of scored){
+    for(const a of (s.e.advice||[])) advice.push(a);
+  }
+  const suggested=[...new Set(advice)].slice(0,2);
+  return {examples: scored, suggested};
+}
+function renderNearExamples(state){
+  const box = document.getElementById("nearExamples");
+  const tips = document.getElementById("suggestedTips");
+  if(!box || !tips){ return; }
+  const near = findNearExamples(state, 3);
+  if(!near.examples.length){
+    box.textContent = "Bibliothèque vide ou pas d'exemples similaires pour l’instant.";
+    tips.textContent = "Conseils recopiables: —";
+    return;
+  }
+  box.textContent = near.examples.map((x,i)=>{
+    const e=x.e;
+    const corrected = (e.advice||[]).slice(0,2).map(a=>`- ${a}`).join("\n") || "- —";
+    return `#${i+1} (sim=${x.simScore}, mots communs=${x.overlap}, gates communes=${x.gateMatch})\nCe qui ressemblait: ${e.text.slice(0,180)}${e.text.length>180?"…":""}\nComment on l'avait corrigé:\n${corrected}`;
+  }).join("\n\n");
+  tips.textContent = near.suggested.length
+    ? `Conseils recopiables (2):\n- ${near.suggested[0]}\n- ${near.suggested[1] || near.suggested[0]}`
+    : "Conseils recopiables: —";
+}
+
+function loadAICfg(){
+  try{
+    const raw = localStorage.getItem(AI_CFG_KEY);
+    const base = {mode:"OFF", endpoint:"", saveInHistory:false};
+    if(!raw) return base;
+    const p = JSON.parse(raw);
+    return {
+      mode: ["OFF","AUTO","ONLINE"].includes(p?.mode) ? p.mode : "OFF",
+      endpoint: String(p?.endpoint || ""),
+      saveInHistory: !!p?.saveInHistory
+    };
+  } catch { return {mode:"OFF", endpoint:"", saveInHistory:false}; }
+}
+function saveAICfg(cfg){
+  localStorage.setItem(AI_CFG_KEY, JSON.stringify({
+    mode: cfg.mode,
+    endpoint: cfg.endpoint,
+    saveInHistory: !!cfg.saveInHistory
+  }));
+}
+function shouldUseAI(mode){
+  if(mode === "ONLINE") return true;
+  if(mode === "AUTO") return !!navigator.onLine;
+  return false;
+}
+function buildAIPayload(level, raw, m, fin){
+  return {
+    tool: "EVALUATORR",
+    level,
+    text: raw,
+    local: {
+      score50: fin.rubric50?.score50 ?? 0,
+      modules9: fin.rubric50?.modules || {},
+      gates: fin.gates || {},
+      keyMetrics: {
+        words: m.words,
+        sentences: m.sents.length,
+        paragraphs: m.paras.length,
+        timeHits: m.timeHits,
+        placeHits: m.placeHits,
+        sensesCovered: m.sensesCovered,
+        nonVisualCovered: m.nonVisualCovered,
+        turnsCount: m.turnsCount,
+        actionPairs: m.actionPairs
+      }
+    },
+    wanted: {jsonSchemaVersion:"1"}
+  };
+}
+async function fetchAIReport(endpoint, payload, timeoutMs=12000){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), timeoutMs);
+  try{
+    const res = await fetch(endpoint, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+      signal: ctrl.signal
+    });
+    const txt = await res.text();
+    let data = null;
+    try{ data = JSON.parse(txt); } catch { data = {raw: txt}; }
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    return {ok:true, data};
+  } catch(e){
+    return {ok:false, error: e?.message || "Erreur réseau"};
+  } finally { clearTimeout(t); }
+}
+function renderAIBox(obj){
+  const box = document.getElementById("aiDiag");
+  if(!box) return;
+  if(!obj){ box.textContent = "—"; return; }
+  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
+  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
+  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
+  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  box.textContent = `Diagnostic IA
+${fmt(diag)}
+
+Conseils prioritaires
+${fmt(conseils)}
+
+Réécritures ciblées (2)
+${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
+
+Appréciation bulletin (optionnel)
+${app || "—"}`;
+}
+const CALIB_KEY = "evaluator_v2_calibration_v1";
+const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
+
+function defaultCalibrationStore(){
+  return {
+    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
+  };
+}
+function loadCalibration(){
+  try{
+    const raw = localStorage.getItem(CALIB_KEY);
+    if(!raw) return defaultCalibrationStore();
+    const parsed = JSON.parse(raw);
+    const base = defaultCalibrationStore();
+    for(const lv of ["5e","4e","3e"]){
+      const p = parsed?.[lv] || {};
+      base[lv] = {
+        n: Number(p.n || 0),
+        deltaMean: Number(p.deltaMean || 0),
+        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
+        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
+      };
+    }
+    return base;
+  } catch { return defaultCalibrationStore(); }
+}
+function saveCalibration(data){
+  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
+}
+function getGateCap50(level, gates){
+  let cap = 50;
+  if(gates?.noEndPunct) cap = Math.min(cap, 24);
+  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
+  if(gates?.paragraphGate) cap = Math.min(cap, 35);
+  if(gates?.sensesGate) cap = Math.min(cap, 35);
+  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
+  return cap;
+}
+function isCalibrationEnabled(){
+  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
+}
+function setCalibrationEnabled(v){
+  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
+}
+function computeCalibrated50(level, rawScore50, gates){
+  const enabled = isCalibrationEnabled();
+  const store = loadCalibration();
+  const profile = store[level] || defaultCalibrationStore()[level];
+  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
+  const cap = getGateCap50(level, gates || {});
+  const score = roundToHalf(Math.min(adjusted, cap));
+  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
+}
+function learnCalibration(level, toolScore50, teacherScore50){
+  const store = loadCalibration();
+  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
+  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
+  const rawDelta = teacherScore50 - toolScore50;
+  const delta = clamp(rawDelta, -clampMax, clampMax);
+  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
+  last.push(Number(delta.toFixed(3)));
+  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
+  store[level] = {
+    n: Number(prof.n || 0) + 1,
+    deltaMean: Number(deltaMean.toFixed(3)),
+    lastDeltas: last,
+    clampMax
+  };
+  saveCalibration(store);
+  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
+}
+
 
 /* ========= Exports ========= */
 function downloadFile(filename, content, mime){
@@ -1422,7 +1934,8 @@ function makePayload(state){
     thresholds: fin.levelCfg,
     pass1: { score10: p1.score, parts: p1.parts },
     pass2: { score10: p2.score, parts: p2.parts },
-    final: { score20: fin.final, verdict: fin.verdict },
+    final: { score20: fin.final, score50: fin.rubric50?.score50 ?? 0, score50Calibrated: fin.calib50?.score ?? fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
+    rubric50: fin.rubric50,
     metrics: {
       words: m.words,
       sentences: m.sents.length,
@@ -1455,7 +1968,8 @@ function makePayload(state){
       veryLongSentences: m.veryLongSentences.length
     },
     audit: fin.audit,
-    comment: fin.comment
+    comment: fin.comment,
+    ai: fin.ai || null
   };
 }
 function toCSVRow(fields){
@@ -1468,12 +1982,16 @@ function exportCSV(state){
   const gates = Object.entries(fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|");
   const topWord = (m.topWords[0]?.[0] ?? "");
   const header = [
-    "timestamp","student","level","final20","pass1_10","pass2_10","words","sentences","paragraphs",
+    "timestamp","student","level","final20","final50","final50Cal","deltaMean50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_tempsLieu","mod_locutionLexique","mod_cohesion","mod_coherence",
+    "words","sentences","paragraphs",
     "endPunct","avgSent","sdSent","mattr","hapaxRatio","top1Share","topWord","suspects","aposBad","confusions",
     "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
   ];
   const row = [
-    new Date().toISOString(), student, level, fin.final, p1.score, p2.score,
+    new Date().toISOString(), student, level, fin.final, (fin.rubric50?.score50 ?? 0), (fin.calib50?.score ?? fin.rubric50?.score50 ?? 0), (fin.calib50?.deltaMean ?? 0), p1.score, p2.score,
+    fin.rubric50?.modules?.langue?.score ?? 0, fin.rubric50?.modules?.narration?.score ?? 0, fin.rubric50?.modules?.description?.score ?? 0,
+    fin.rubric50?.modules?.dialogues?.score ?? 0, fin.rubric50?.modules?.styleGeneral?.score ?? 0, fin.rubric50?.modules?.tempsLieu?.score ?? 0,
+    fin.rubric50?.modules?.locutionLexique?.score ?? 0, fin.rubric50?.modules?.cohesion?.score ?? 0, fin.rubric50?.modules?.coherence?.score ?? 0,
     m.words, m.sents.length, m.paras.length,
     m.endPunct, m.avgSent.toFixed(2), m.sdSent.toFixed(2), m.mattr.toFixed(4), m.hapaxRatio.toFixed(4),
     m.top1Share.toFixed(4), topWord, m.suspectTotal, m.aposBad, m.confusionTotal,
@@ -1500,6 +2018,7 @@ function saveHistory(arr){
 function renderHistory(){
   const box = document.getElementById("historyBox");
   const info = document.getElementById("histInfo");
+  if(!box || !info) return;
   const arr = loadHistory();
   info.textContent = `${arr.length} entrée(s)`;
   if(!arr.length){
@@ -1509,7 +2028,7 @@ function renderHistory(){
   const lines = arr.slice(-12).reverse().map(x=>{
     const d = new Date(x.timestamp);
     const ds = isNaN(d.getTime()) ? x.timestamp : d.toLocaleString();
-    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 — mots:${x.words} — gates:${x.gates||"—"}`;
+    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 (${x.final50 ?? "—"}/50 → ${x.final50Cal ?? "—"}/50, Δmoy=${(x.deltaMean50 ?? 0)>=0?"+":""}${Number(x.deltaMean50 ?? 0).toFixed(2)}) — mots:${x.words} — gates:${x.gates||"—"}`;
   }).join("\n");
   box.textContent = lines;
 }
@@ -1536,9 +2055,33 @@ document.getElementById("passScores").textContent =
   `${p1.score.toFixed(1)}/10  •  ${p2.score.toFixed(1)}/10  •  +${p3s.toFixed(1)} exc`;
   document.getElementById("finalScore").textContent = `${fin.final.toFixed(1)}/20`;
   document.getElementById("finalVerdict").textContent = fin.verdict;
+  const raw50 = (fin.rubric50?.score50 ?? 0);
+  const cal50 = (fin.calib50?.score ?? raw50);
+  const calOn = !!fin.calib50?.enabled;
+  const tgl = document.getElementById("toggleCalibration");
+  if(tgl) tgl.checked = calOn;
+  document.getElementById("finalScore50").textContent = calOn
+    ? `${raw50.toFixed(1)}/50 → calibrée ${cal50.toFixed(1)}/50`
+    : `${raw50.toFixed(1)}/50`;
+  const capLabel = (fin.rubric50?.caps || []).map(c=>`≤${c.cap50}`).join(", ") || "aucun plafond";
+  const dm = fin.calib50?.deltaMean ?? 0;
+  document.getElementById("final50Hint").textContent = `Calibration ${calOn?"ON":"OFF"} (Δmoy=${dm>=0?"+":""}${dm.toFixed(2)}, n=${fin.calib50?.n ?? 0}) • ${(fin.rubric50?.caps||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
 
   const pct = clamp01(fin.final/20) * 100;
   document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
+
+  const tbody = document.querySelector("#rubricTable tbody");
+  if(tbody){
+    const labels = {
+      narration:"Narration", description:"Description", dialogues:"Dialogues", styleGeneral:"Style général",
+      tempsLieu:"Temps/Lieu", locutionLexique:"Locution/Lexique", cohesion:"Cohésion", coherence:"Cohérence", langue:"Langue"
+    };
+    const list = fin.rubric50?.modules || {};
+    tbody.innerHTML = Object.entries(list).map(([k,v])=>{
+      const keyLine = (v.auditLines && v.auditLines[0]) || "—";
+      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
+    }).join("") || `<tr><td colspan="3">—</td></tr>`;
+  }
 
   const ul = document.getElementById("auditList");
   ul.innerHTML = "";
@@ -1561,30 +2104,60 @@ POV interne : ${m.internalHits} (je=${m.jeCount})
 Lumière/ombre : ${m.lightHits}
 Sens couverts : ${m.sensesCovered}/5 (non-visuels=${m.nonVisualCovered})
 Lexique : MATTR=${m.mattr.toFixed(2)} • hapax=${(m.hapaxRatio*100).toFixed(0)}% • top1=${(m.top1Share*100).toFixed(1)}% (${m.topWords[0]?.[0]||"—"})
-Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}`;
+Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}
+Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée ${(fin.calib50?.score ?? fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 
-
+  document.getElementById("contentProbe").textContent = probe;
   renderHistory();
 }
 
 /* ========= Actions ========= */
 const elText = document.getElementById("text");
-const status = document.getElementById("status");
-function setStatus(s){ status.textContent = s; }
+const status = document.getElementById("status") || {textContent:""};
+function setStatus(s){ if(status) status.textContent = s; }
+function bindEvt(id, evt, fn){ const el = document.getElementById(id); if(el) el.addEventListener(evt, fn); }
 
-document.getElementById("btnEval").addEventListener("click", ()=>{
+const calToggle = document.getElementById("toggleCalibration");
+if(calToggle) calToggle.checked = isCalibrationEnabled();
+const aiCfg = loadAICfg();
+const aiModeEl = document.getElementById("aiMode");
+const aiEndpointEl = document.getElementById("aiEndpoint");
+const saveAIHistoryEl = document.getElementById("saveAIHistory");
+if(aiModeEl) aiModeEl.value = aiCfg.mode;
+if(aiEndpointEl) aiEndpointEl.value = aiCfg.endpoint;
+if(saveAIHistoryEl) saveAIHistoryEl.checked = !!aiCfg.saveInHistory;
+function persistAICfgFromUI(){
+  saveAICfg({
+    mode: aiModeEl?.value || "OFF",
+    endpoint: (aiEndpointEl?.value || "").trim(),
+    saveInHistory: !!saveAIHistoryEl?.checked
+  });
+}
+if(aiModeEl) aiModeEl.addEventListener("change", persistAICfgFromUI);
+if(aiEndpointEl) aiEndpointEl.addEventListener("change", persistAICfgFromUI);
+if(saveAIHistoryEl) saveAIHistoryEl.addEventListener("change", persistAICfgFromUI);
+
+
+function runLocalEvaluation(raw, level){
+  const m = computeMetrics(raw);
+  const p1 = scorePass1(m, level);
+  const p2 = scorePass2(m, level);
+  const fin = buildFinal(m, p1, p2, level, raw);
+  renderAll(level, m, p1, p2, fin);
+  window.__last = {level, raw, m, p1, p2, fin};
+  renderNearExamples(window.__last);
+  return window.__last;
+}
+
+bindEvt("btnEval","click", ()=>{
   try{
     document.getElementById("errBox").style.display = "none";
     const raw = normalizeText(elText.value);
     if(!raw){ setStatus("Colle un texte d’abord."); return; }
     setStatus("Analyse…");
     const level = document.getElementById("level").value;
-    const m = computeMetrics(raw);
-    const p1 = scorePass1(m, level);
-    const p2 = scorePass2(m, level);
-    const fin = buildFinal(m, p1, p2, level);
-    renderAll(level, m, p1, p2, fin);
-    window.__last = {level, m, p1, p2, fin};
+    runLocalEvaluation(raw, level);
+    renderAIBox(null);
     setStatus("Terminé.");
   } catch(e){
     const errBox = document.getElementById("errBox");
@@ -1594,12 +2167,95 @@ document.getElementById("btnEval").addEventListener("click", ()=>{
   }
 });
 
-document.getElementById("btnClear").addEventListener("click", ()=>{
+
+
+document.getElementById("btnTestAI")?.addEventListener("click", async ()=>{
+  persistAICfgFromUI();
+  const endpoint = (aiEndpointEl?.value || "").trim();
+  if(!endpoint){ setStatus("Saisis un endpoint IA."); return; }
+  setStatus("Test endpoint IA…");
+  const ping = await fetchAIReport(endpoint, {tool:"EVALUATORR", wanted:{jsonSchemaVersion:"1"}}, 12000);
+  setStatus(ping.ok ? "Endpoint IA OK." : "Endpoint IA indisponible.");
+});
+
+document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
+  try{
+    document.getElementById("errBox").style.display = "none";
+    const raw = normalizeText(elText.value);
+    if(!raw){ setStatus("Colle un texte d’abord."); return; }
+    const level = document.getElementById("level").value;
+    const base = runLocalEvaluation(raw, level);
+    persistAICfgFromUI();
+
+    const aiMode = aiModeEl?.value || "OFF";
+    const endpoint = (aiEndpointEl?.value || "").trim();
+    const minWords = LEVEL[level]?.minWords || 150;
+    if(base.m.words < minWords){
+      setStatus(`IA non envoyée : texte trop court (<${minWords} mots). Offline OK.`);
+      renderAIBox({diagnostic:"IA non sollicitée (seuil de mots non atteint).", conseils:["Allonger la copie avant appel IA."], reecritures:[]});
+      return;
+    }
+    if(!shouldUseAI(aiMode)){ setStatus("Mode IA OFF/AUTO hors-ligne : offline OK."); renderAIBox({diagnostic:"Mode IA inactif.", conseils:[], reecritures:[]}); return; }
+    if(!endpoint){ setStatus("Endpoint IA manquant, offline OK."); renderAIBox({diagnostic:"Endpoint IA non configuré.", conseils:[], reecritures:[]}); return; }
+
+    setStatus("Éval locale OK, appel IA…");
+    const payload = buildAIPayload(level, raw, base.m, base.fin);
+    const ai = await fetchAIReport(endpoint, payload, 12000);
+    if(!ai.ok){
+      setStatus("IA indisponible, offline OK.");
+      renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:["Conserver le diagnostic local."], reecritures:[]});
+      return;
+    }
+    renderAIBox(ai.data || {});
+    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
+    if(saveAIHistoryEl?.checked){
+      if(window.__last?.fin) window.__last.fin.ai = ai.data;
+    }
+    setStatus("Évaluation + IA terminée.");
+  } catch(e){
+    setStatus("IA indisponible, offline OK.");
+    renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:[], reecritures:[]});
+  }
+});
+
+document.getElementById("btnMarkGoodExample")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const anonymize = !!document.getElementById("exampleAnonymize")?.checked;
+  const ex = addGoodExampleFromState(last, {anonymize});
+  renderNearExamples(last);
+  setStatus(`Exemple ajouté à la bibliothèque (${ex.level}, ${ex.score50}/50).`);
+});
+
+document.getElementById("btnLearnCalibration")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const val = Number(document.getElementById("teacherScore50").value);
+  if(!Number.isFinite(val)){ setStatus("Saisis une note prof /50."); return; }
+  const teacher = clamp(roundToHalf(val), 0, 50);
+  const learnt = learnCalibration(last.level, last.fin.rubric50?.score50 ?? 0, teacher);
+  const cap = getGateCap50(last.level, last.fin.gates || {});
+  last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+  renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  setStatus(`Calibration OK (Δ=${learnt.delta>=0?"+":""}${learnt.delta.toFixed(1)}, Δmoy=${learnt.deltaMean>=0?"+":""}${learnt.deltaMean.toFixed(2)}, cap=${cap}/50).`);
+});
+
+document.getElementById("toggleCalibration")?.addEventListener("change", (e)=>{
+  setCalibrationEnabled(!!e.target.checked);
+  const last = window.__last;
+  if(last){
+    last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+    renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  }
+  setStatus(`Calibration ${e.target.checked?"activée":"désactivée"}.`);
+});
+
+bindEvt("btnClear","click", ()=>{
   elText.value = "";
   setStatus("Effacé.");
 });
 
-document.getElementById("btnExample").addEventListener("click", ()=>{
+bindEvt("btnExample","click", ()=>{
   // Exemple volontairement “bon” mais pas parfait : v2 doit rester exigeant
   elText.value =
 `Je suis rentré tard, et la pluie avait laissé une odeur de goudron chaud sur le trottoir. Dans l’entrée, le plafonnier clignotait : une lumière jaune, mal assurée.
@@ -1609,7 +2265,7 @@ Je suis resté sur le seuil. Je me suis dit que si j’entrais, quelque chose me
   setStatus("Exemple inséré.");
 });
 
-document.getElementById("btnCopy").addEventListener("click", async ()=>{
+bindEvt("btnCopy","click", async ()=>{
   const txt = document.getElementById("comment").textContent || "";
   if(!txt || txt === "—") return;
   try{
@@ -1620,14 +2276,14 @@ document.getElementById("btnCopy").addEventListener("click", async ()=>{
   }
 });
 
-document.getElementById("btnExportTxt").addEventListener("click", ()=>{
+bindEvt("btnExportTxt","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   downloadFile("evaluator_v2_commentaire.txt", last.fin.comment + "\n", "text/plain;charset=utf-8");
   setStatus("TXT exporté.");
 });
 
-document.getElementById("btnExportJson").addEventListener("click", ()=>{
+bindEvt("btnExportJson","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const payload = makePayload(last);
@@ -1635,14 +2291,14 @@ document.getElementById("btnExportJson").addEventListener("click", ()=>{
   setStatus("JSON exporté.");
 });
 
-document.getElementById("btnExportCsv").addEventListener("click", ()=>{
+bindEvt("btnExportCsv","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   exportCSV(last);
   setStatus("CSV exporté.");
 });
 
-document.getElementById("btnSave").addEventListener("click", ()=>{
+bindEvt("btnSave","click", ()=>{
   const last = window.__last;
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   const student = (document.getElementById("student").value || "").trim();
@@ -1652,10 +2308,14 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
     student,
     level: last.level,
     final20: last.fin.final,
+    final50: last.fin.rubric50?.score50 ?? 0,
+    final50Cal: last.fin.calib50?.score ?? last.fin.rubric50?.score50 ?? 0,
+    deltaMean50: last.fin.calib50?.deltaMean ?? 0,
     pass1_10: last.p1.score,
     pass2_10: last.p2.score,
     words: last.m.words,
-    gates
+    gates,
+    aiSaved: !!(last.fin && last.fin.ai)
   };
   const arr = loadHistory();
   arr.push(entry);
@@ -1664,7 +2324,7 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
   setStatus("Entrée sauvegardée.");
 });
 
-document.getElementById("btnClearHistory").addEventListener("click", ()=>{
+bindEvt("btnClearHistory","click", ()=>{
   localStorage.removeItem(HIST_KEY);
   renderHistory();
   setStatus("Historique vidé.");
@@ -1687,11 +2347,11 @@ function showView(view){
   }
 }
 
-document.getElementById("goHome")?.addEventListener("click", ()=>showView("home"));
-document.getElementById("goApp")?.addEventListener("click",  ()=>showView("app"));
-document.getElementById("startBtn")?.addEventListener("click", ()=>showView("app"));
+bindEvt("goHome","click", ()=>showView("home"));
+bindEvt("goApp","click",  ()=>showView("app"));
+bindEvt("startBtn","click", ()=>showView("app"));
 
-document.getElementById("quickPasteBtn")?.addEventListener("click", ()=>{
+bindEvt("quickPasteBtn","click", ()=>{
   showView("app");
   const t = document.getElementById("text");
   if(!t) return;
