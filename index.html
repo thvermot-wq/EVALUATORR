@@ -335,6 +335,12 @@
             <input id="toggleCalibration" type="checkbox" checked /> Calibration ON/OFF
           </label>
         </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme bon exemple</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="exampleAnonymize" type="checkbox" checked /> Anonymiser le texte
+          </label>
+        </div>
       </div>
 
       <div class="hr"></div>
@@ -422,6 +428,14 @@
         <details>
           <summary>Diagnostic IA</summary>
           <div class="out" id="aiDiag">—</div>
+        </details>
+      </div>
+
+      <div style="margin-top:10px">
+        <details open>
+          <summary>Exemples proches (bibliothèque prof)</summary>
+          <div class="out" id="nearExamples">—</div>
+          <div class="out" id="suggestedTips" style="margin-top:8px">—</div>
         </details>
       </div>
 
@@ -1612,6 +1626,124 @@ Objectif mesurable :
 
 
 const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
+const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
+const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
+
+function textHash32(str){
+  let h = 5381;
+  for(let i=0;i<str.length;i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
+function activeGateList(gates){
+  return Object.entries(gates || {}).filter(([,v])=>!!v).map(([k])=>k);
+}
+function loadAIReviews(){
+  try{ const raw=localStorage.getItem(AI_REVIEW_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveAIReviews(arr){ localStorage.setItem(AI_REVIEW_KEY, JSON.stringify(arr.slice(-120))); }
+function storeAIReview(level, raw, m, fin, aiData){
+  const rec = {
+    ts: new Date().toISOString(),
+    level,
+    textHash: textHash32(raw || ""),
+    score50: fin?.rubric50?.score50 ?? 0,
+    modules: fin?.rubric50?.modules || {},
+    gates: activeGateList(fin?.gates || {}),
+    topWords: (m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    aiReview: aiData || null
+  };
+  const arr=loadAIReviews(); arr.push(rec); saveAIReviews(arr);
+}
+
+function loadExampleLibrary(){
+  try{ const raw=localStorage.getItem(EXAMPLE_LIB_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveExampleLibrary(arr){ localStorage.setItem(EXAMPLE_LIB_KEY, JSON.stringify(arr.slice(-400))); }
+function anonymizeExampleText(raw){
+  const lines=(raw||"").split(/\n+/).map(l=>l.trim()).filter(Boolean);
+  const trimmed=lines.join(" ").slice(0,900);
+  return trimmed
+    .replace(/\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g, "[NOM]")
+    .replace(/\b\d{1,2}[hH]\d{0,2}\b/g,"[HEURE]")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g,"[DATE]");
+}
+function extractAdviceFromState(state){
+  const out=[];
+  const comment=String(state?.fin?.comment||"");
+  for(const line of comment.split(/\n+/)){
+    const t=line.trim();
+    if(t.startsWith("- ")) out.push(t.slice(2));
+  }
+  const ai = state?.fin?.ai;
+  if(ai?.priorities && Array.isArray(ai.priorities)){
+    for(const p of ai.priorities){
+      if(p?.do_next) out.push(String(p.do_next));
+      else if(typeof p === 'string') out.push(p);
+    }
+  }
+  return [...new Set(out.filter(Boolean))].slice(0,8);
+}
+function addGoodExampleFromState(state, options={}){
+  const raw = state?.raw || state?.m?.text || "";
+  const advice = extractAdviceFromState(state);
+  const ex = {
+    ts: new Date().toISOString(),
+    level: state.level,
+    textHash: textHash32(raw),
+    text: options.anonymize ? anonymizeExampleText(raw) : String(raw).slice(0,900),
+    score50: state?.fin?.rubric50?.score50 ?? 0,
+    modules: state?.fin?.rubric50?.modules || {},
+    gates: activeGateList(state?.fin?.gates || {}),
+    topWords: (state?.m?.topWords||[]).slice(0,8).map(x=>x[0]),
+    audit: (state?.fin?.audit||[]).slice(-12),
+    advice
+  };
+  const lib=loadExampleLibrary();
+  lib.push(ex);
+  saveExampleLibrary(lib);
+  return ex;
+}
+function findNearExamples(state, maxN=3){
+  const lib=loadExampleLibrary();
+  const curWords = new Set((state?.m?.topWords||[]).slice(0,8).map(x=>x[0]));
+  const curGates = new Set(activeGateList(state?.fin?.gates || {}));
+  const level=state?.level;
+  const scored = lib.map(e=>{
+    const ew = new Set(e.topWords||[]);
+    const eg = new Set(e.gates||[]);
+    let overlap=0; for(const w of curWords){ if(ew.has(w)) overlap++; }
+    let gateMatch=0; for(const g of curGates){ if(eg.has(g)) gateMatch++; }
+    const levelBonus = e.level===level ? 2 : 0;
+    const score = overlap*2 + gateMatch*3 + levelBonus;
+    return {e, simScore: score, overlap, gateMatch};
+  }).filter(x=>x.simScore>0).sort((a,b)=>b.simScore-a.simScore).slice(0,maxN);
+
+  const advice=[];
+  for(const s of scored){
+    for(const a of (s.e.advice||[])) advice.push(a);
+  }
+  const suggested=[...new Set(advice)].slice(0,2);
+  return {examples: scored, suggested};
+}
+function renderNearExamples(state){
+  const box = document.getElementById("nearExamples");
+  const tips = document.getElementById("suggestedTips");
+  if(!box || !tips){ return; }
+  const near = findNearExamples(state, 3);
+  if(!near.examples.length){
+    box.textContent = "Bibliothèque vide ou pas d'exemples similaires pour l’instant.";
+    tips.textContent = "Conseils recopiables: —";
+    return;
+  }
+  box.textContent = near.examples.map((x,i)=>{
+    const e=x.e;
+    const corrected = (e.advice||[]).slice(0,2).map(a=>`- ${a}`).join("\n") || "- —";
+    return `#${i+1} (sim=${x.simScore}, mots communs=${x.overlap}, gates communes=${x.gateMatch})\nCe qui ressemblait: ${e.text.slice(0,180)}${e.text.length>180?"…":""}\nComment on l'avait corrigé:\n${corrected}`;
+  }).join("\n\n");
+  tips.textContent = near.suggested.length
+    ? `Conseils recopiables (2):\n- ${near.suggested[0]}\n- ${near.suggested[1] || near.suggested[0]}`
+    : "Conseils recopiables: —";
+}
 
 function loadAICfg(){
   try{
@@ -1702,249 +1834,6 @@ ${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
 Appréciation bulletin (optionnel)
 ${app || "—"}`;
 }
-const CALIB_KEY = "evaluator_v2_calibration_v1";
-const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
-
-function defaultCalibrationStore(){
-  return {
-    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
-    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
-    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
-  };
-}
-function loadCalibration(){
-  try{
-    const raw = localStorage.getItem(CALIB_KEY);
-    if(!raw) return defaultCalibrationStore();
-    const parsed = JSON.parse(raw);
-    const base = defaultCalibrationStore();
-    for(const lv of ["5e","4e","3e"]){
-      const p = parsed?.[lv] || {};
-      base[lv] = {
-        n: Number(p.n || 0),
-        deltaMean: Number(p.deltaMean || 0),
-        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
-        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
-      };
-    }
-    return base;
-  } catch { return defaultCalibrationStore(); }
-}
-function saveCalibration(data){
-  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
-}
-function getGateCap50(level, gates){
-  let cap = 50;
-  if(gates?.noEndPunct) cap = Math.min(cap, 24);
-  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
-  if(gates?.paragraphGate) cap = Math.min(cap, 35);
-  if(gates?.sensesGate) cap = Math.min(cap, 35);
-  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
-  return cap;
-}
-function isCalibrationEnabled(){
-  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
-}
-function setCalibrationEnabled(v){
-  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
-}
-function computeCalibrated50(level, rawScore50, gates){
-  const enabled = isCalibrationEnabled();
-  const store = loadCalibration();
-  const profile = store[level] || defaultCalibrationStore()[level];
-  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
-  const cap = getGateCap50(level, gates || {});
-  const score = roundToHalf(Math.min(adjusted, cap));
-  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
-}
-function learnCalibration(level, toolScore50, teacherScore50){
-  const store = loadCalibration();
-  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
-  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
-  const rawDelta = teacherScore50 - toolScore50;
-  const delta = clamp(rawDelta, -clampMax, clampMax);
-  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
-  last.push(Number(delta.toFixed(3)));
-  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
-  store[level] = {
-    n: Number(prof.n || 0) + 1,
-    deltaMean: Number(deltaMean.toFixed(3)),
-    lastDeltas: last,
-    clampMax
-  };
-  saveCalibration(store);
-  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
-}
-
-
-
-const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
-
-function loadAICfg(){
-  try{
-    const raw = localStorage.getItem(AI_CFG_KEY);
-    const base = {mode:"OFF", endpoint:"", saveInHistory:false};
-    if(!raw) return base;
-    const p = JSON.parse(raw);
-    return {
-      mode: ["OFF","AUTO","ONLINE"].includes(p?.mode) ? p.mode : "OFF",
-      endpoint: String(p?.endpoint || ""),
-      saveInHistory: !!p?.saveInHistory
-    };
-  } catch { return {mode:"OFF", endpoint:"", saveInHistory:false}; }
-}
-function saveAICfg(cfg){
-  localStorage.setItem(AI_CFG_KEY, JSON.stringify({
-    mode: cfg.mode,
-    endpoint: cfg.endpoint,
-    saveInHistory: !!cfg.saveInHistory
-  }));
-}
-function shouldUseAI(mode){
-  if(mode === "ONLINE") return true;
-  if(mode === "AUTO") return !!navigator.onLine;
-  return false;
-}
-function buildAIPayload(level, raw, m, fin){
-  return {
-    tool: "EVALUATORR",
-    level,
-    text: raw,
-    local: {
-      score50: fin.rubric50?.score50 ?? 0,
-      modules9: fin.rubric50?.modules || {},
-      gates: fin.gates || {},
-      keyMetrics: {
-        words: m.words,
-        sentences: m.sents.length,
-        paragraphs: m.paras.length,
-        timeHits: m.timeHits,
-        placeHits: m.placeHits,
-        sensesCovered: m.sensesCovered,
-        nonVisualCovered: m.nonVisualCovered,
-        turnsCount: m.turnsCount,
-        actionPairs: m.actionPairs
-      }
-    },
-    wanted: {jsonSchemaVersion:"1"}
-  };
-}
-async function fetchAIReport(endpoint, payload, timeoutMs=12000){
-  const ctrl = new AbortController();
-  const t = setTimeout(()=>ctrl.abort(), timeoutMs);
-  try{
-    const res = await fetch(endpoint, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(payload),
-      signal: ctrl.signal
-    });
-    const txt = await res.text();
-    let data = null;
-    try{ data = JSON.parse(txt); } catch { data = {raw: txt}; }
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    return {ok:true, data};
-  } catch(e){
-    return {ok:false, error: e?.message || "Erreur réseau"};
-  } finally { clearTimeout(t); }
-}
-function renderAIBox(obj){
-  const box = document.getElementById("aiDiag");
-  if(!box) return;
-  if(!obj){ box.textContent = "—"; return; }
-  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
-  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
-  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
-  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
-  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
-  box.textContent = `Diagnostic IA
-${fmt(diag)}
-
-Conseils prioritaires
-${fmt(conseils)}
-
-Réécritures ciblées (2)
-${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
-
-Appréciation bulletin (optionnel)
-${app || "—"}`;
-}
-const CALIB_KEY = "evaluator_v2_calibration_v1";
-const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
-
-function defaultCalibrationStore(){
-  return {
-    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
-    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
-    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
-  };
-}
-function loadCalibration(){
-  try{
-    const raw = localStorage.getItem(CALIB_KEY);
-    if(!raw) return defaultCalibrationStore();
-    const parsed = JSON.parse(raw);
-    const base = defaultCalibrationStore();
-    for(const lv of ["5e","4e","3e"]){
-      const p = parsed?.[lv] || {};
-      base[lv] = {
-        n: Number(p.n || 0),
-        deltaMean: Number(p.deltaMean || 0),
-        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
-        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
-      };
-    }
-    return base;
-  } catch { return defaultCalibrationStore(); }
-}
-function saveCalibration(data){
-  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
-}
-function getGateCap50(level, gates){
-  let cap = 50;
-  if(gates?.noEndPunct) cap = Math.min(cap, 24);
-  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
-  if(gates?.paragraphGate) cap = Math.min(cap, 35);
-  if(gates?.sensesGate) cap = Math.min(cap, 35);
-  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
-  return cap;
-}
-function isCalibrationEnabled(){
-  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
-}
-function setCalibrationEnabled(v){
-  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
-}
-function computeCalibrated50(level, rawScore50, gates){
-  const enabled = isCalibrationEnabled();
-  const store = loadCalibration();
-  const profile = store[level] || defaultCalibrationStore()[level];
-  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
-  const cap = getGateCap50(level, gates || {});
-  const score = roundToHalf(Math.min(adjusted, cap));
-  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
-}
-function learnCalibration(level, toolScore50, teacherScore50){
-  const store = loadCalibration();
-  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
-  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
-  const rawDelta = teacherScore50 - toolScore50;
-  const delta = clamp(rawDelta, -clampMax, clampMax);
-  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
-  last.push(Number(delta.toFixed(3)));
-  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
-  store[level] = {
-    n: Number(prof.n || 0) + 1,
-    deltaMean: Number(deltaMean.toFixed(3)),
-    lastDeltas: last,
-    clampMax
-  };
-  saveCalibration(store);
-  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
-}
-
-
-
 const CALIB_KEY = "evaluator_v2_calibration_v1";
 const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
 
@@ -2253,7 +2142,8 @@ function runLocalEvaluation(raw, level){
   const p2 = scorePass2(m, level);
   const fin = buildFinal(m, p1, p2, level, raw);
   renderAll(level, m, p1, p2, fin);
-  window.__last = {level, m, p1, p2, fin};
+  window.__last = {level, raw, m, p1, p2, fin};
+  renderNearExamples(window.__last);
   return window.__last;
 }
 
@@ -2315,6 +2205,7 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
       return;
     }
     renderAIBox(ai.data || {});
+    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
     if(saveAIHistoryEl?.checked){
       if(window.__last?.fin) window.__last.fin.ai = ai.data;
     }
@@ -2323,6 +2214,15 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
     setStatus("IA indisponible, offline OK.");
     renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:[], reecritures:[]});
   }
+});
+
+document.getElementById("btnMarkGoodExample")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const anonymize = !!document.getElementById("exampleAnonymize")?.checked;
+  const ex = addGoodExampleFromState(last, {anonymize});
+  renderNearExamples(last);
+  setStatus(`Exemple ajouté à la bibliothèque (${ex.level}, ${ex.score50}/50).`);
 });
 
 document.getElementById("btnLearnCalibration")?.addEventListener("click", ()=>{
