@@ -308,6 +308,14 @@
         <div class="lab">Note /50 (barème collège)</div>
         <div class="val" id="finalScore50">—</div>
         <div class="small" id="final50Hint">9 modules natifs (charte collège)</div>
+        <div class="row" style="margin-top:8px">
+          <label for="teacherScore50">Note prof finale (/50)</label>
+          <input id="teacherScore50" type="number" min="0" max="50" step="0.5" placeholder="ex: 31.5" style="width:120px" />
+          <button class="btn secondary" id="btnLearnCalibration" type="button">Apprendre (calibrer)</button>
+          <label class="pill" style="gap:8px;cursor:pointer">
+            <input id="toggleCalibration" type="checkbox" checked /> Calibration ON/OFF
+          </label>
+        </div>
       </div>
 
       <div class="hr"></div>
@@ -1424,6 +1432,7 @@ function buildFinal(m, p1, p2, level, raw){
   const {L, gates} = computeGates(m, level);
   const p3 = scorePass3(m, level, p1, p2);
   const rubric50 = scoreRubric50({level, raw, m, p1, p2, p3, fin:null});
+  const calib50 = computeCalibrated50(level, rubric50.score50, gates);
 
   audit.push("— Passe 1 (forme) —");
   audit.push(...p1.audit);
@@ -1436,6 +1445,7 @@ function buildFinal(m, p1, p2, level, raw){
     audit.push(`${k}: ${v.score}/${v.max} — ${(v.auditLines && v.auditLines[0]) || "—"}`);
   }
   for(const c of rubric50.caps){ audit.push(`Plafond /50 : ${c.reason} ⇒ ≤ ${c.cap50}/50.`); }
+  audit.push(`Calibration /50 : ${calib50.enabled?"ON":"OFF"} (deltaMean=${calib50.deltaMean>=0?"+":""}${calib50.deltaMean.toFixed(2)}, n=${calib50.n}) => ${calib50.score.toFixed(1)}/50.`);
   alerts.push(...p1.alerts, ...p2.alerts);
   for(const mod of Object.values(rubric50.modules)){
     for(const a of (mod.alerts||[])) alerts.push({lvl:"warn", t:`/50 ${a}`});
@@ -1570,9 +1580,85 @@ Objectif mesurable :
     return `<div class="tag ${cls}">${escapeHtml(a.t)}</div>`;
   }).join("") : `<div class="tag ok">Pas d’alerte saillante.</div>`;
 
-  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50};
+  return {final, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric50, calib50};
 
 }
+
+
+const CALIB_KEY = "evaluator_v2_calibration_v1";
+const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
+
+function defaultCalibrationStore(){
+  return {
+    "5e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "4e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3},
+    "3e": {n:0, deltaMean:0, lastDeltas:[], clampMax:3}
+  };
+}
+function loadCalibration(){
+  try{
+    const raw = localStorage.getItem(CALIB_KEY);
+    if(!raw) return defaultCalibrationStore();
+    const parsed = JSON.parse(raw);
+    const base = defaultCalibrationStore();
+    for(const lv of ["5e","4e","3e"]){
+      const p = parsed?.[lv] || {};
+      base[lv] = {
+        n: Number(p.n || 0),
+        deltaMean: Number(p.deltaMean || 0),
+        lastDeltas: Array.isArray(p.lastDeltas) ? p.lastDeltas.slice(-20).map(Number).filter(x=>Number.isFinite(x)) : [],
+        clampMax: Number.isFinite(Number(p.clampMax)) ? Number(p.clampMax) : 3
+      };
+    }
+    return base;
+  } catch { return defaultCalibrationStore(); }
+}
+function saveCalibration(data){
+  localStorage.setItem(CALIB_KEY, JSON.stringify(data));
+}
+function getGateCap50(level, gates){
+  let cap = 50;
+  if(gates?.noEndPunct) cap = Math.min(cap, 24);
+  if(gates?.tooShort) cap = Math.min(cap, (level==="3e"?28:(level==="4e"?30:32)));
+  if(gates?.paragraphGate) cap = Math.min(cap, 35);
+  if(gates?.sensesGate) cap = Math.min(cap, 35);
+  if(gates?.timePlaceGate) cap = Math.min(cap, 35);
+  return cap;
+}
+function isCalibrationEnabled(){
+  return localStorage.getItem(CALIB_TOGGLE_KEY) !== "off";
+}
+function setCalibrationEnabled(v){
+  localStorage.setItem(CALIB_TOGGLE_KEY, v ? "on" : "off");
+}
+function computeCalibrated50(level, rawScore50, gates){
+  const enabled = isCalibrationEnabled();
+  const store = loadCalibration();
+  const profile = store[level] || defaultCalibrationStore()[level];
+  const adjusted = enabled ? clamp(rawScore50 + (profile.deltaMean || 0), 0, 50) : rawScore50;
+  const cap = getGateCap50(level, gates || {});
+  const score = roundToHalf(Math.min(adjusted, cap));
+  return {score, enabled, deltaMean: Number((profile.deltaMean || 0).toFixed(2)), n: profile.n || 0, cap};
+}
+function learnCalibration(level, toolScore50, teacherScore50){
+  const store = loadCalibration();
+  const prof = store[level] || {n:0, deltaMean:0, lastDeltas:[], clampMax:3};
+  const clampMax = Number.isFinite(Number(prof.clampMax)) ? Number(prof.clampMax) : 3;
+  const rawDelta = teacherScore50 - toolScore50;
+  const delta = clamp(rawDelta, -clampMax, clampMax);
+  const last = Array.isArray(prof.lastDeltas) ? prof.lastDeltas.slice(-19) : [];
+  last.push(Number(delta.toFixed(3)));
+  const deltaMean = last.length ? (last.reduce((a,b)=>a+b,0)/last.length) : 0;
+  store[level] = {
+    n: Number(prof.n || 0) + 1,
+    deltaMean: Number(deltaMean.toFixed(3)),
+    lastDeltas: last,
+    clampMax
+  };
+  saveCalibration(store);
+  return {delta, deltaMean: store[level].deltaMean, n: store[level].n};
+}
+
 
 /* ========= Exports ========= */
 function downloadFile(filename, content, mime){
@@ -1599,7 +1685,7 @@ function makePayload(state){
     thresholds: fin.levelCfg,
     pass1: { score10: p1.score, parts: p1.parts },
     pass2: { score10: p2.score, parts: p2.parts },
-    final: { score20: fin.final, score50: fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
+    final: { score20: fin.final, score50: fin.rubric50?.score50 ?? 0, score50Calibrated: fin.calib50?.score ?? fin.rubric50?.score50 ?? 0, verdict: fin.verdict },
     rubric50: fin.rubric50,
     metrics: {
       words: m.words,
@@ -1646,13 +1732,13 @@ function exportCSV(state){
   const gates = Object.entries(fin.gates).filter(([k,v])=>v).map(([k])=>k).join("|");
   const topWord = (m.topWords[0]?.[0] ?? "");
   const header = [
-    "timestamp","student","level","final20","final50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_tempsLieu","mod_locutionLexique","mod_cohesion","mod_coherence",
+    "timestamp","student","level","final20","final50","final50Cal","deltaMean50","pass1_10","pass2_10","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_tempsLieu","mod_locutionLexique","mod_cohesion","mod_coherence",
     "words","sentences","paragraphs",
     "endPunct","avgSent","sdSent","mattr","hapaxRatio","top1Share","topWord","suspects","aposBad","confusions",
     "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
   ];
   const row = [
-    new Date().toISOString(), student, level, fin.final, (fin.rubric50?.score50 ?? 0), p1.score, p2.score,
+    new Date().toISOString(), student, level, fin.final, (fin.rubric50?.score50 ?? 0), (fin.calib50?.score ?? fin.rubric50?.score50 ?? 0), (fin.calib50?.deltaMean ?? 0), p1.score, p2.score,
     fin.rubric50?.modules?.langue?.score ?? 0, fin.rubric50?.modules?.narration?.score ?? 0, fin.rubric50?.modules?.description?.score ?? 0,
     fin.rubric50?.modules?.dialogues?.score ?? 0, fin.rubric50?.modules?.styleGeneral?.score ?? 0, fin.rubric50?.modules?.tempsLieu?.score ?? 0,
     fin.rubric50?.modules?.locutionLexique?.score ?? 0, fin.rubric50?.modules?.cohesion?.score ?? 0, fin.rubric50?.modules?.coherence?.score ?? 0,
@@ -1691,7 +1777,7 @@ function renderHistory(){
   const lines = arr.slice(-12).reverse().map(x=>{
     const d = new Date(x.timestamp);
     const ds = isNaN(d.getTime()) ? x.timestamp : d.toLocaleString();
-    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 (${x.final50 ?? "—"}/50) — mots:${x.words} — gates:${x.gates||"—"}`;
+    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 (${x.final50 ?? "—"}/50 → ${x.final50Cal ?? "—"}/50, Δmoy=${(x.deltaMean50 ?? 0)>=0?"+":""}${Number(x.deltaMean50 ?? 0).toFixed(2)}) — mots:${x.words} — gates:${x.gates||"—"}`;
   }).join("\n");
   box.textContent = lines;
 }
@@ -1718,9 +1804,17 @@ document.getElementById("passScores").textContent =
   `${p1.score.toFixed(1)}/10  •  ${p2.score.toFixed(1)}/10  •  +${p3s.toFixed(1)} exc`;
   document.getElementById("finalScore").textContent = `${fin.final.toFixed(1)}/20`;
   document.getElementById("finalVerdict").textContent = fin.verdict;
-  document.getElementById("finalScore50").textContent = `${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
+  const raw50 = (fin.rubric50?.score50 ?? 0);
+  const cal50 = (fin.calib50?.score ?? raw50);
+  const calOn = !!fin.calib50?.enabled;
+  const tgl = document.getElementById("toggleCalibration");
+  if(tgl) tgl.checked = calOn;
+  document.getElementById("finalScore50").textContent = calOn
+    ? `${raw50.toFixed(1)}/50 → calibrée ${cal50.toFixed(1)}/50`
+    : `${raw50.toFixed(1)}/50`;
   const capLabel = (fin.rubric50?.caps || []).map(c=>`≤${c.cap50}`).join(", ") || "aucun plafond";
-  document.getElementById("final50Hint").textContent = `Modules: ${(fin.rubric50?.caps||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
+  const dm = fin.calib50?.deltaMean ?? 0;
+  document.getElementById("final50Hint").textContent = `Calibration ${calOn?"ON":"OFF"} (Δmoy=${dm>=0?"+":""}${dm.toFixed(2)}, n=${fin.calib50?.n ?? 0}) • ${(fin.rubric50?.caps||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}).`;
 
   const pct = clamp01(fin.final/20) * 100;
   document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
@@ -1760,7 +1854,7 @@ Lumière/ombre : ${m.lightHits}
 Sens couverts : ${m.sensesCovered}/5 (non-visuels=${m.nonVisualCovered})
 Lexique : MATTR=${m.mattr.toFixed(2)} • hapax=${(m.hapaxRatio*100).toFixed(0)}% • top1=${(m.top1Share*100).toFixed(1)}% (${m.topWords[0]?.[0]||"—"})
 Forme : fins de phrase=${m.endPunct} • apostrophes fautives=${m.aposBad} • confusions=${m.confusionTotal}
-Barème /50 : ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
+Barème /50 : brut ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50 • calibrée ${(fin.calib50?.score ?? fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 
   document.getElementById("contentProbe").textContent = probe;
   renderHistory();
@@ -1770,6 +1864,9 @@ Barème /50 : ${(fin.rubric50?.score50 ?? 0).toFixed(1)}/50`;
 const elText = document.getElementById("text");
 const status = document.getElementById("status");
 function setStatus(s){ status.textContent = s; }
+
+const calToggle = document.getElementById("toggleCalibration");
+if(calToggle) calToggle.checked = isCalibrationEnabled();
 
 document.getElementById("btnEval").addEventListener("click", ()=>{
   try{
@@ -1791,6 +1888,30 @@ document.getElementById("btnEval").addEventListener("click", ()=>{
     errBox.textContent = "Erreur pendant l’évaluation : " + (e?.message || e);
     setStatus("Erreur.");
   }
+});
+
+
+document.getElementById("btnLearnCalibration")?.addEventListener("click", ()=>{
+  const last = window.__last;
+  if(!last){ setStatus("Évalue un texte d’abord."); return; }
+  const val = Number(document.getElementById("teacherScore50").value);
+  if(!Number.isFinite(val)){ setStatus("Saisis une note prof /50."); return; }
+  const teacher = clamp(roundToHalf(val), 0, 50);
+  const learnt = learnCalibration(last.level, last.fin.rubric50?.score50 ?? 0, teacher);
+  const cap = getGateCap50(last.level, last.fin.gates || {});
+  last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+  renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  setStatus(`Calibration OK (Δ=${learnt.delta>=0?"+":""}${learnt.delta.toFixed(1)}, Δmoy=${learnt.deltaMean>=0?"+":""}${learnt.deltaMean.toFixed(2)}, cap=${cap}/50).`);
+});
+
+document.getElementById("toggleCalibration")?.addEventListener("change", (e)=>{
+  setCalibrationEnabled(!!e.target.checked);
+  const last = window.__last;
+  if(last){
+    last.fin.calib50 = computeCalibrated50(last.level, last.fin.rubric50?.score50 ?? 0, last.fin.gates || {});
+    renderAll(last.level, last.m, last.p1, last.p2, last.fin);
+  }
+  setStatus(`Calibration ${e.target.checked?"activée":"désactivée"}.`);
 });
 
 document.getElementById("btnClear").addEventListener("click", ()=>{
@@ -1852,6 +1973,8 @@ document.getElementById("btnSave").addEventListener("click", ()=>{
     level: last.level,
     final20: last.fin.final,
     final50: last.fin.rubric50?.score50 ?? 0,
+    final50Cal: last.fin.calib50?.score ?? last.fin.rubric50?.score50 ?? 0,
+    deltaMean50: last.fin.calib50?.deltaMean ?? 0,
     pass1_10: last.p1.score,
     pass2_10: last.p2.score,
     words: last.m.words,
