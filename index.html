@@ -441,10 +441,16 @@ Texte..."></textarea>
           <summary>Barème /60 (modules)</summary>
           <table class="rubric-table" id="rubricTable">
             <thead>
-              <tr><th>Module</th><th>Phrase clé</th><th>Score</th></tr>
+              <tr><th>Module</th><th>Signal</th><th>Preuve</th><th>Score</th></tr>
             </thead>
-            <tbody><tr><td colspan="3">—</td></tr></tbody>
+            <tbody><tr><td colspan="4">—</td></tr></tbody>
           </table>
+
+          <div class="small" style="margin-top:6px">Clique sur « Voir preuve » pour ouvrir les extraits du module.</div>
+          <div class="out" id="rubricEvidenceBox" style="margin-top:6px">—</div>
+          <div style="margin-top:6px; display:flex; gap:8px">
+            <button class="btn secondary" id="btnCopyEvidence" type="button">Copier preuves</button>
+          </div>
         </details>
       </div>
 
@@ -2293,7 +2299,22 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   modules.lexique.evidence = lexV2.evidence || [];
   modules.lexique.traceIds.push("lexique_v2");
 
+  const traceById = new Map((trace||[]).map(t=>[t.ruleId, t]));
   for(const v of Object.values(modules)){
+    if(!Array.isArray(v.signals)) v.signals = [];
+    if(!Array.isArray(v.evidence)) v.evidence = [];
+    for(const rid of (v.traceIds || [])){
+      const t = traceById.get(rid);
+      if(!t) continue;
+      if(v.signals.length < 3 && t.message) v.signals.push(t.message);
+      for(const ev of (t.evidence || [])){
+        if(v.evidence.length >= 3) break;
+        if(ev && typeof ev.excerpt === "string") v.evidence.push(ev);
+      }
+      if(v.signals.length >= 3 && v.evidence.length >= 3) break;
+    }
+    v.signals = v.signals.slice(0,3);
+    v.evidence = v.evidence.slice(0,3);
     v.score = roundToHalf(clamp(v.score, 0, v.max));
   }
 
@@ -2368,46 +2389,61 @@ function buildMicroDrills(m, gates){
   return drills.slice(0,2);
 }
 
-function buildRewritePlan(fin){
-  const trace = [...(fin?.trace||[])].sort((a,b)=>a.delta-b.delta);
-  const out = [];
-  const used = new Set();
-  const nice = {langue:"Langue", narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style", temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence"};
-  const actions = {
-    langue:["Repère 3 fautes probables dans le texte.","Réécris les extraits en corrigeant seulement la forme.","Relis à voix haute et valide la ponctuation."],
-    narration:["Clarifie l'objectif du personnage.","Ajoute un obstacle concret.","Termine par une conséquence nette."],
-    description:["Ajoute 1 élément de lieu précis.","Ajoute 1 objet concret utile à l'action.","Ajoute 1 détail perturbant (trace/bruit/odeur)."],
-    dialogues:["Ajoute des tirets/guillemets cohérents.","Place une friction dans les 3 premières répliques.","Termine le dialogue par une décision claire."],
-    style:["Supprime 2 tics (genre/bref/du coup).","Raccourcis une phrase trop longue.","Termine un paragraphe sur une action."],
-    temps_lieu:["Ajoute un repère de temps explicite.","Ajoute un repère de lieu explicite.","Rends un déplacement lisible (verbe + préposition)."],
-    lexique:["Remplace 3 mots vagues par des mots précis.","Évite la répétition du mot dominant.","Ajoute 2 verbes d'action spécifiques."],
-    cohesion:["Remplace une répétition brute par une reprise.","Vérifie que chaque pronom renvoie à un nom clair.","Relie les phrases avec un connecteur utile."],
-    coherence:["Ajoute une cause avant une conséquence.","Vérifie la logique des actions.","Assure une fin compatible avec ce qui précède."]
+function buildRewritePlan(rubric60){
+  const modules = Object.entries(rubric60?.modules || {}).map(([k,v])=>({key:k, score:Number(v?.score||0), max:Number(v?.max||0), signals:(v?.signals||[]), evidence:(v?.evidence||[])}));
+  const ranked = modules
+    .map(m=>({...m, deficit: Math.max(0, m.max - m.score)}))
+    .sort((a,b)=> b.deficit - a.deficit);
+
+  const actionByModule = {
+    lexique: "Remplace 4 verbes faibles par 4 verbes d’action + ajoute 2 connecteurs.",
+    cohesion: "Réintroduis le nom référent avant 3 pronoms 'il/elle' + 1 reprise nominale par paragraphe.",
+    coherence: "Ajoute 1 lien causal et 1 déplacement explicite.",
+    langue: "Corrige 3 erreurs de forme prioritaires (accords/ponctuation), puis relis à voix haute.",
+    narration: "Clarifie l’objectif du personnage, ajoute 1 obstacle, puis 1 conséquence nette.",
+    description: "Ajoute 2 détails concrets (lieu/objet) et 1 détail sensoriel non visuel.",
+    dialogues: "Ajoute des marqueurs de dialogue cohérents et une réplique qui fait avancer l’action.",
+    style: "Coupe 1 phrase longue, supprime 2 tics et termine un paragraphe sur une action.",
+    temps_lieu: "Ajoute 1 repère de temps et 1 repère de lieu, puis explicite un trajet.",
   };
-  for(const t of trace){
-    if((t.delta||0) >= 0) continue;
-    const module = categoryFromTraceItem(t);
-    if(used.has(module)) continue;
-    used.add(module);
-    const evidenceExcerpt = (t.evidence||[])[0]?.excerpt || "Extrait non disponible.";
-    out.push({
-      title: `${nice[module]||module} — priorité`,
-      why: `${t.message} Cette règle freine la note actuelle.`,
-      doNext: actions[module] || actions.langue,
-      evidenceExcerpt
+  const nice = {langue:"Langue", narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style", temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence"};
+
+  const plan = [];
+  for(const mod of ranked){
+    if(mod.deficit <= 0) continue;
+    const signal = mod.signals[0] || "Module à renforcer";
+    const ev = mod.evidence[0]?.excerpt || "Preuve à confirmer dans le texte.";
+    plan.push({
+      module: mod.key,
+      title: `${nice[mod.key]||mod.key} — priorité`,
+      why: `${signal} (manque ${mod.deficit.toFixed(1)}/${mod.max}).`,
+      action: actionByModule[mod.key] || "Renforce ce module avec 2 révisions ciblées et une relecture finale.",
+      evidenceExcerpt: ev
     });
-    if(out.length>=3) break;
+    if(plan.length>=3) break;
   }
-  if(!out.length){
-    out.push({
-      title:"Consolider les points forts",
-      why:"Aucun blocage majeur détecté dans la trace.",
-      doNext:["Garde la même structure narrative.","Ajoute un détail sensoriel non visuel.","Relis pour stabiliser la ponctuation."],
-      evidenceExcerpt:"Texte globalement cohérent."
+
+  if(!plan.length){
+    plan.push({
+      module:"global",
+      title:"Consolidation",
+      why:"Les modules sont globalement équilibrés.",
+      action:"Fais une relecture rapide: ponctuation de fin, connecteurs, cohérence des pronoms.",
+      evidenceExcerpt:"Aucun déficit majeur détecté."
     });
+  }
+  return plan;
+}
+
+function buildRubricEvidenceMap(rubric){
+  const out = {};
+  for(const [k,v] of Object.entries(rubric?.modules || {})){
+    const evs = (v?.evidence || []).filter(e=>e && typeof e.excerpt === 'string').slice(0,3);
+    if(evs.length) out[k] = evs;
   }
   return out;
 }
+
 
 
 /* ========= Finale /20 + commentaires ========= */
@@ -2556,7 +2592,7 @@ Ce qui est bien :
 Pour la prochaine fois :
 - ${objective}`;
   } else if(mode === "bulletin"){
-    const rpLite = buildRewritePlan({trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
+    const rpLite = buildRewritePlan(rubric);
     const pA = (rpLite[0]?.title || "priorité forme").replace(" — priorité","").toLowerCase();
     const pB = (rpLite[1]?.title || "priorité récit").replace(" — priorité","").toLowerCase();
     const fort = (f2[0] || "investissement régulier").toLowerCase();
@@ -2592,7 +2628,7 @@ Objectif mesurable :
   if(getRefMode()==="severe" && gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
   if(getRefMode()==="severe" && gates.ancrageMissing) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final ancrageMissing.", firstEvidence(m.text)));
 
-  const rewritePlan = buildRewritePlan({trace: mergedTrace, rubric50:{score50:rubric.rubric50_legacy, modules:rubric.modules, caps50:[]}, gates, final});
+  const rewritePlan = buildRewritePlan(rubric);
 
   return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric, rubric50_legacy: rubric.rubric50_legacy, calib50, trace: mergedTrace, microDrills, rewritePlan};
 
@@ -3197,9 +3233,42 @@ document.getElementById("passScores").textContent =
     };
     const list = fin.rubric?.modules || {};
     tbody.innerHTML = Object.entries(list).map(([k,v])=>{
-      const keyLine = diagnoseRubricModule(k, v, fin.trace || []);
-      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
-    }).join("") || `<tr><td colspan="3">—</td></tr>`;
+      const sig = (v.signals||[]).slice(0,2);
+      const keyLine = sig.length ? sig.join(" • ") : diagnoseRubricModule(k, v, fin.trace || []);
+      const hasEvidence = (v.evidence||[]).length > 0;
+      const btn = hasEvidence ? `<button class="btn secondary btn-proof" type="button" data-module="${escapeHtml(k)}">Voir preuve</button>` : "—";
+      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${btn}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
+    }).join("") || `<tr><td colspan="4">—</td></tr>`;
+
+    const evBox = document.getElementById("rubricEvidenceBox");
+    const evidenceMap = buildRubricEvidenceMap(fin.rubric || {});
+    const renderEvidence = (moduleKey)=>{
+      if(!evBox) return;
+      const label = labels[moduleKey] || moduleKey;
+      const evs = (evidenceMap[moduleKey] || []).slice(0,3);
+      evBox.textContent = evs.length ? `${label}\n` + evs.map((e,i)=>`${i+1}. ${e.excerpt || "—"}`).join("\n") : "Aucune preuve disponible pour ce module.";
+    };
+
+    const firstWithEvidence = Object.keys(evidenceMap)[0] || "";
+    if(firstWithEvidence) renderEvidence(firstWithEvidence);
+    else if(evBox) evBox.textContent = "Aucune preuve module disponible.";
+
+    tbody.querySelectorAll('.btn-proof').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const moduleKey = btn.getAttribute('data-module') || "";
+        renderEvidence(moduleKey);
+      });
+    });
+
+    const copyBtn = document.getElementById('btnCopyEvidence');
+    if(copyBtn){
+      copyBtn.onclick = async ()=>{
+        const txt = evBox?.textContent || "";
+        if(!txt || txt === "—") return setStatus("Aucune preuve à copier.");
+        try{ await navigator.clipboard.writeText(txt); setStatus("Preuves copiées."); }
+        catch(_){ setStatus("Copie impossible (permissions navigateur)."); }
+      };
+    }
   }
 
   const ul = document.getElementById("auditList");
@@ -3283,7 +3352,7 @@ Barème /60 : ${(fin.rubric?.score60 ?? 0).toFixed(1)}/60 (legacy ${(fin.rubric5
   const rpBox = document.getElementById("rewritePlan");
   if(rpBox){
     const rp = fin.rewritePlan || [];
-    rpBox.textContent = rp.length ? rp.map((p, i)=>`${i+1}. ${p.title}\nPourquoi : ${p.why}\nPreuve : « ${p.evidenceExcerpt} »\nÀ faire :\n- ${(p.doNext||[]).join("\n- ")}`).join("\n\n") : "—";
+    rpBox.textContent = rp.length ? rp.map((p, i)=>`${i+1}. ${p.title}\nPourquoi : ${p.why}\nPreuve : « ${p.evidenceExcerpt} »\nAction : ${p.action || "—"}`).join("\n\n") : "—";
   }
 
   const d = m.dialogue || {};
