@@ -1102,8 +1102,13 @@ function computeMetrics(raw){
   const connectorsFound = new Set();
   const connectorEvidence = [];
   for(const c of CONNECTEURS){
-    const esc = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`\b${esc}\b`, "gi");
+    let re;
+    if(c.includes(" ")){
+      re = new RegExp(c.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"), "gi");
+    } else {
+      const esc = c.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+      re = new RegExp("\\b" + esc + "\\b", "gi");
+    }
     const matches = [...lower.matchAll(re)];
     if(matches.length){
       connectorsCount += matches.length;
