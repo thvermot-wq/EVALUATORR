@@ -265,6 +265,13 @@
             </select>
           </div>
           <div>
+            <label for="refMode">Référentiel</label><br/>
+            <select id="refMode">
+              <option value="eduscol" selected>Référentiel Éduscol (standard)</option>
+              <option value="severe">Mode sévère (diagnostic)</option>
+            </select>
+          </div>
+          <div>
             <label for="longThr">Phrase longue ≥ (mots)</label><br/>
             <input id="longThr" type="number" min="18" max="45" value="26" />
           </div>
@@ -314,7 +321,7 @@
           </div>
           <div>
             <label for="aiEndpoint">aiEndpoint (URL)</label><br/>
-            <input id="aiEndpoint" type="text" placeholder="https://.../evaluate" style="width:300px" />
+            <input id="aiEndpoint" type="text" placeholder="https://.../correct" style="width:300px" />
           </div>
           <button class="btn secondary" id="btnTestAI" type="button">Tester endpoint</button>
           <label class="pill" style="gap:8px;cursor:pointer">
@@ -353,7 +360,7 @@
           </label>
         </div>
         <div class="row" style="margin-top:8px">
-          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme bon exemple</button>
+          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme exemple</button>
           <label class="pill" style="gap:8px;cursor:pointer">
             <input id="exampleAnonymize" type="checkbox" checked /> Anonymiser le texte
           </label>
@@ -859,7 +866,7 @@ const DIALOGUE_SORTIE_RE = /\?|\b(partir|revenir|dire|prévenir|prevenir|jure|pr
 
 
 // Seuils par niveau (v2 sévère)
-const LEVEL = {
+const LEVEL_SEVERE = {
   "5e": {
     minWords: 150,
     minParagraphsIfOver: {words: 170, paras: 2},
@@ -894,6 +901,50 @@ const LEVEL = {
     idealAvgMin: 11, idealAvgMax: 19
   }
 };
+
+const LEVEL_EDUSCOL = {
+  "5e": {
+    minWords: 130,
+    minParagraphsIfOver: {words: 160, paras: 2},
+    minSensesCovered: 1,
+    minNonVisualSenses: 0,
+    mattrOk: 0.38, mattrGood: 0.43,
+    maxTopWordShare: 0.075,
+    minEndPunct: 3,
+    targetEndsPerWords: 45,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "4e": {
+    minWords: 150,
+    minParagraphsIfOver: {words: 170, paras: 2},
+    minSensesCovered: 2,
+    minNonVisualSenses: 1,
+    mattrOk: 0.40, mattrGood: 0.45,
+    maxTopWordShare: 0.070,
+    minEndPunct: 3,
+    targetEndsPerWords: 42,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "3e": {
+    minWords: 170,
+    minParagraphsIfOver: {words: 190, paras: 3},
+    minSensesCovered: 2,
+    minNonVisualSenses: 1,
+    mattrOk: 0.42, mattrGood: 0.47,
+    maxTopWordShare: 0.065,
+    minEndPunct: 4,
+    targetEndsPerWords: 40,
+    idealAvgMin: 11, idealAvgMax: 19
+  }
+};
+
+function getRefMode(){
+  return document.getElementById("refMode")?.value || "eduscol";
+}
+function getLevelCfg(level){
+  const ref = getRefMode();
+  return (ref === "severe" ? LEVEL_SEVERE : LEVEL_EDUSCOL)[level] || LEVEL_EDUSCOL["4e"];
+}
 
 const GATE_CAPS_50 = {
   noEndPunct: {cap50:24, reason:"Aucune ponctuation de fin de phrase"},
@@ -966,12 +1017,13 @@ function computeMetrics(raw){
   const suspects = {};
   function isSuspect(w){
     if(w.length < 4) return false;
-    if(w.includes("'")) return false;
+    if(w.includes("'") || w.includes("-") || w.includes("’")) return false;
     if(FR_FREQ_WORDS.has(w)) return false;
     if(/([a-zà-öø-ÿ])\1\1/.test(w)) return true;
-    if(/[bcdfghjklmnpqrstvwxz]{5,}/.test(w)) return true;
+    if(/[bcdfghjklmnpqrstvwxz]{6,}/.test(w)) return true;
     if(/(ee|aa|ii|oo|uu)$/.test(w)) return true;
-    if(w.length >= 10 && !FR_FREQ_WORDS.has(w)) return true;
+    if(/\d/.test(w)) return true;
+    if(/(?=.*[a-zà-öø-ÿ])(?=.*\d)/i.test(w)) return true;
     return false;
   }
   for(const w of tokens){
@@ -1212,7 +1264,7 @@ function computeMetrics(raw){
 
 /* ========= Gates (exigences minimales) ========= */
 function computeGates(m, level){
-  const L = LEVEL[level];
+  const L = getLevelCfg(level);
 
   // Segmentation tolérante : segUnits (si dispo) sinon endPunctAny, sinon endPunct
   const seg = (m.segUnits ?? m.endPunctAny ?? m.endPunct ?? 0);
@@ -1220,12 +1272,19 @@ function computeGates(m, level){
   // Hard gate : aucune fin de phrase (on accepte … comme fin si endPunctAny est calculé)
   const noEnd = ((m.endPunctAny ?? m.endPunct) === 0);
 
+  const timeMissing = (m.timeHits < 1);
+  const placeMissing = (m.placeHits < 1);
+  const ancrageMissing = (level === "3e") ? (timeMissing || placeMissing) : (timeMissing && placeMissing);
+
   const gates = {
     noEndPunct: noEnd,
     tooShort: (m.words < L.minWords),
     paragraphGate: (m.words >= L.minParagraphsIfOver.words && m.paras.length < L.minParagraphsIfOver.paras),
     sensesGate: (m.sensesCovered < L.minSensesCovered || m.nonVisualCovered < L.minNonVisualSenses),
-    timePlaceGate: (m.timeHits < 1 || m.placeHits < 1),
+    timeMissing,
+    placeMissing,
+    ancrageMissing,
+    timePlaceGate: ancrageMissing,
 
     // Segmentation jugée sur segUnits (meilleur pour le style littéraire)
     punctuationScarce: (seg < L.minEndPunct),
@@ -1350,9 +1409,9 @@ function scorePass1(m, level){
 
   // suspects
   if(m.suspectTotal === 0) { ortho += 1.4; audit.push("ORTHO (+) : peu d’alertes “mots suspects” (proxy)."); }
-  else if(m.suspectTotal <= 2) { ortho += 1.1; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
-  else if(m.suspectTotal <= 5) { ortho += 0.8; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
-  else { ortho += 0.4; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 3) { ortho += 1.2; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 7) { ortho += 0.9; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
+  else { ortho += 0.6; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
 
   if(m.suspectTotal > 0){
     alerts.push({lvl:"warn", t:`Mots suspects (proxy) : ${m.suspectTop.map(([w,n])=>`${w}(${n})`).join(", ")}`});
@@ -1525,11 +1584,11 @@ function scorePass2(m, level){
   const hasClosure = /(\bfinalement\b|\bà la fin\b|\benfin\b|\bdésormais\b|\bdepuis ce jour\b)/.test(m.lower);
   if(hasClosure) coh += 0.3; else coh += 0.1;
 
-  // repères temps/lieu
-  if(gates.timePlaceGate){
+  // repères temps/lieu (soft)
+  if(gates.ancrageMissing){
     coh -= 0.5;
-    audit.push("COH (-) : repères temps/lieu insuffisants.");
-    alerts.push({lvl:"bad", t:"Récit : il manque un repère de temps et/ou de lieu (minimum)."});
+    audit.push("COH (-) : ancrage temps/lieu insuffisant.");
+    alerts.push({lvl:"warn", t: level==="3e" ? "Récit : en 3e, temps et lieu doivent être explicites." : "Récit : ajoute au moins un ancrage (temps ou lieu)."});
   }
 
   // mur de texte pénalise cohérence (lecture)
@@ -1609,11 +1668,12 @@ function scorePass2(m, level){
     pass2 = Math.min(pass2, 5.5);
     audit.push(`PASS2 cap : texte trop court (<${L.minWords}) ⇒ Passe 2 ≤ 5,5/10.`);
   }
-  if(gates.timePlaceGate){
+  const refMode = getRefMode();
+  if(refMode === "severe" && gates.ancrageMissing){
     pass2 = Math.min(pass2, 6.0);
-    audit.push("PASS2 cap : manque de repères temps/lieu ⇒ Passe 2 ≤ 6/10.");
+    audit.push("PASS2 cap : ancrage temps/lieu insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
-  if(gates.sensesGate){
+  if(refMode === "severe" && gates.sensesGate){
     pass2 = Math.min(pass2, 6.0);
     audit.push("PASS2 cap : sensoriel insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
@@ -1624,7 +1684,7 @@ function scorePass2(m, level){
   trace.push(traceItem("pass2","ld", ld, "Lumière/ombre."));
   trace.push(traceItem("pass2","sens", sens, "5 sens et non-visuels."));
   trace.push(traceItem("pass2","interest", interest, "Intérêt narratif."));
-  if(gates.timePlaceGate) trace.push(traceItem("pass2","gate_time_place", -0.5, "Repères temps/lieu insuffisants.", firstEvidence(m.text)));
+  if(gates.ancrageMissing) trace.push(traceItem("pass2","gate_time_place", -0.5, "Ancrage temps/lieu insuffisant.", firstEvidence(m.text)));
   if(gates.sensesGate) trace.push(traceItem("pass2","gate_senses", -0.5, "Sensoriel insuffisant.", firstEvidence(m.text)));
   if(gates.tooShort) trace.push(traceItem("pass2","gate_too_short", -0.5, "Texte trop court.", firstEvidence(m.text)));
   return {score: roundToHalf(clamp(pass2, 0, 10)), audit: traceToAudit(trace), alerts, parts:{theme, coh, pov, ld, sens, interest}, gates, trace};
@@ -1642,7 +1702,10 @@ function scorePass3(m, level, p1, p2){
   const alerts = [];
 
   // Garde-fou : si forme trop faible, pas d’excellence (évite d’offrir des points aux copies illisibles)
-  const formOK = (p1?.score ?? 0) >= 6.5 && m.endPunct > 0 && m.words >= (LEVEL[level]?.minWords ?? 150);
+  const refMode = getRefMode();
+  const cfg = (refMode === "severe" ? LEVEL_SEVERE : LEVEL_EDUSCOL)[level] || getLevelCfg(level);
+  const p1Floor = (refMode === "eduscol" && level !== "3e") ? 6.0 : 6.5;
+  const formOK = (p1?.score ?? 0) >= p1Floor && m.endPunct > 0 && m.words >= (cfg?.minWords ?? 150);
 
   if(!formOK){
     audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
@@ -2006,7 +2069,8 @@ function buildFinal(m, p1, p2, level, raw){
   let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
   const score20_raw = final;
 
-  // Hard gates (plafonds)
+  // Plafonds finaux
+  const refMode = getRefMode();
   if(gates.noEndPunct){
     final = Math.min(final, 9.5);
     audit.push("Plafond : aucune ponctuation de fin de phrase (. ! ?) ⇒ note ≤ 9,5/20.");
@@ -2020,13 +2084,17 @@ function buildFinal(m, p1, p2, level, raw){
     final = Math.min(final, 14.0);
     audit.push("Plafond : segmentation insuffisante (paragraphes) ⇒ note ≤ 14/20.");
   }
-  if(gates.sensesGate){
+  if(gates.wallTextGate){
+    final = Math.min(final, 14.0);
+    audit.push("Plafond : mur de texte ⇒ note ≤ 14/20.");
+  }
+  if(refMode === "severe" && gates.sensesGate){
     final = Math.min(final, 14.0);
     audit.push("Plafond : sensoriel insuffisant ⇒ note ≤ 14/20.");
   }
-  if(gates.timePlaceGate){
+  if(refMode === "severe" && gates.ancrageMissing){
     final = Math.min(final, 14.0);
-    audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
+    audit.push("Plafond : ancrage temps/lieu insuffisant ⇒ note ≤ 14/20.");
   }
 
   if((m.dialogue?.nbRepliques || 0) >= 3 && (m.dialogue?.dashMajRatio || 0) >= 0.75 && p1.parts.pseg < 2.0){
@@ -2063,7 +2131,7 @@ function buildFinal(m, p1, p2, level, raw){
   if(gates.noEndPunct) axes.push("Ponctuation : poser des points (. ! ?) — sinon la note reste sous 10/20.");
   if(gates.tooShort) axes.push(`Longueur : viser au moins ${L.minWords} mots pour développer (30 lignes ≠ 8 phrases).`);
   if(gates.paragraphGate) axes.push(`Segmentation : ${L.minParagraphsIfOver.paras} paragraphes minimum (début / bascule / fin).`);
-  if(gates.timePlaceGate) axes.push("Repères : installer un temps + un lieu dès le début.");
+  if(gates.ancrageMissing) axes.push(level==="3e" ? "Repères : installer explicitement un temps ET un lieu dès le début." : "Repères : installer au moins un ancrage explicite (temps ou lieu) dès le début.");
   if(gates.sensesGate) axes.push(`Sensoriel : ajouter au moins ${L.minNonVisualSenses} sens non-visuel (ouïe/odeur/toucher/goût).`);
 
   // Axes techniques
@@ -2078,7 +2146,7 @@ function buildFinal(m, p1, p2, level, raw){
   if(gates.noEndPunct) objective = "Prochain texte : au moins 6 fins de phrase (. ! ?) + majuscule après chaque point.";
   else if(gates.tooShort) objective = `Prochain texte : atteindre ≥ ${L.minWords} mots et écrire en 3 paragraphes (début / problème / fin).`;
   else if(gates.sensesGate) objective = `Prochain texte : intégrer 3 sens dont ${L.minNonVisualSenses} non-visuels (ouïe/odeur/toucher/goût).`;
-  else if(gates.timePlaceGate) objective = "Prochain texte : première phrase = repère de temps + repère de lieu (immédiats).";
+  else if(gates.ancrageMissing) objective = (level==="3e") ? "Prochain texte : première phrase = repère de temps + repère de lieu (obligatoires)." : "Prochain texte : première phrase = au moins un repère explicite (temps ou lieu).";
 
   // commentaire prof / élève
   const mode = document.getElementById("modeComment").value || "prof";
@@ -2087,6 +2155,7 @@ function buildFinal(m, p1, p2, level, raw){
 
   const f2 = [forces[0], forces[1] || forces[0]];
   const a2 = [axes[0], axes[1] || axes[0]];
+  const blockLabel = getRefMode()==="eduscol" ? "Critère à renforcer" : "Plafond activé";
 
   let comment = "";
   if(mode === "eleve"){
@@ -2099,8 +2168,8 @@ Ce qui est bien :
 - ${f2[1]}
 
 À faire maintenant :
-- ${a2[0]}
-- ${a2[1]}
+- ${blockLabel} : ${a2[0]}
+- ${blockLabel} : ${a2[1]}
 
 Pour la prochaine fois :
 - ${objective}`;
@@ -2121,9 +2190,9 @@ Forces :
 - ${f2[0]}
 - ${f2[1]}
 
-Ce qui bloque la note :
-- ${a2[0]}
-- ${a2[1]}
+${getRefMode()==="eduscol"?"Critères à renforcer :":"Plafonds activés :"}
+- ${blockLabel} : ${a2[0]}
+- ${blockLabel} : ${a2[1]}
 
 Objectif mesurable :
 - ${objective}`;
@@ -2138,8 +2207,8 @@ Objectif mesurable :
   const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[]), ...(rubric50.trace||[])];
   if(gates.noEndPunct) mergedTrace.push(traceItem("final","cap_no_end_punct", 0, "Plafond final noEndPunct.", firstEvidence(m.text)));
   if(gates.tooShort) mergedTrace.push(traceItem("final","cap_too_short", 0, "Plafond final tooShort.", firstEvidence(m.text)));
-  if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
-  if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
+  if(getRefMode()==="severe" && gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
+  if(getRefMode()==="severe" && gates.ancrageMissing) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final ancrageMissing.", firstEvidence(m.text)));
 
   const rewritePlan = buildRewritePlan({trace: mergedTrace, rubric50, gates, final});
 
@@ -2150,6 +2219,7 @@ Objectif mesurable :
 
 const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
 const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
+const AI_MEMORY_KEY = "evaluator_v2_ai_memory_v1";
 const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
 
 function textHash32(str){
@@ -2164,6 +2234,33 @@ function loadAIReviews(){
   try{ const raw=localStorage.getItem(AI_REVIEW_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
 }
 function saveAIReviews(arr){ localStorage.setItem(AI_REVIEW_KEY, JSON.stringify(arr.slice(-120))); }
+function loadAIMemory(){
+  try{ const raw=localStorage.getItem(AI_MEMORY_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveAIMemory(arr){ localStorage.setItem(AI_MEMORY_KEY, JSON.stringify(arr.slice(-240))); }
+function storeAIMemory(raw, level, fin, aiData){
+  const rec = {
+    ts: new Date().toISOString(),
+    hash: textHash32(raw || ""),
+    level,
+    local: {
+      score50: fin?.rubric50?.score50 ?? 0,
+      modules: fin?.rubric50?.modules || {},
+      gates: fin?.gates || {},
+      traceLight: (fin?.trace||[]).slice(0,14).map(t=>({
+        module: t.module,
+        ruleId: t.ruleId,
+        delta: t.delta,
+        message: t.message
+      }))
+    },
+    ia: aiData || null
+  };
+  const arr = loadAIMemory();
+  arr.push(rec);
+  saveAIMemory(arr);
+  return rec;
+}
 function storeAIReview(level, raw, m, fin, aiData){
   const rec = {
     ts: new Date().toISOString(),
@@ -2293,28 +2390,22 @@ function shouldUseAI(mode){
   if(mode === "AUTO") return !!navigator.onLine;
   return false;
 }
-function buildAIPayload(level, raw, m, fin){
+function buildAIPayload(level, raw, _m, fin){
   return {
-    tool: "EVALUATORR",
     level,
     text: raw,
     local: {
       score50: fin.rubric50?.score50 ?? 0,
-      modules9: fin.rubric50?.modules || {},
+      modules: fin.rubric50?.modules || {},
       gates: fin.gates || {},
-      keyMetrics: {
-        words: m.words,
-        sentences: m.sents.length,
-        paragraphs: m.paras.length,
-        timeHits: m.timeHits,
-        placeHits: m.placeHits,
-        sensesCovered: m.sensesCovered,
-        nonVisualCovered: m.nonVisualCovered,
-        turnsCount: m.turnsCount,
-        actionPairs: m.actionPairs
-      }
+      traceLight: (fin.trace||[]).slice(0,14).map(t=>({
+        module: t.module,
+        ruleId: t.ruleId,
+        delta: t.delta,
+        message: t.message
+      }))
     },
-    wanted: {jsonSchemaVersion:"1"}
+    schema: "evaluatorr-v1"
   };
 }
 async function fetchAIReport(endpoint, payload, timeoutMs=12000){
@@ -2336,15 +2427,30 @@ async function fetchAIReport(endpoint, payload, timeoutMs=12000){
     return {ok:false, error: e?.message || "Erreur réseau"};
   } finally { clearTimeout(t); }
 }
+function normalizeAIData(obj){
+  if(!obj || typeof obj !== "object") return {};
+  if(obj.data && typeof obj.data === "object") return obj.data;
+  return obj;
+}
 function renderAIBox(obj){
   const box = document.getElementById("aiDiag");
   if(!box) return;
   if(!obj){ box.textContent = "—"; return; }
-  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
-  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
-  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
-  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
-  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  const data = normalizeAIData(obj);
+  const diag = data.diagnostic || data.diagnosticIA || data.analysis || "—";
+  const conseils = data.conseils || data.priorities || data.conseilsPrioritaires || [];
+  const rew = data.reecritures || data.rewrites || data.reecrituresCiblees || [];
+  const app = data.appreciation || data.bulletin || data.appreciationBulletin || "";
+  const fmtItem = (x)=>{
+    if(typeof x === "string") return x;
+    if(x && typeof x === "object"){
+      if(x.do_next) return `${x.title ? `${x.title} — ` : ""}${x.do_next}`;
+      if(x.after_proposal) return `${x.focus ? `${x.focus} — ` : ""}${x.after_proposal}`;
+      return JSON.stringify(x);
+    }
+    return String(x ?? "");
+  };
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${fmtItem(x)}`).join("\n") : String(v||"—");
   box.textContent = `Diagnostic IA
 ${fmt(diag)}
 
@@ -2356,6 +2462,32 @@ ${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
 
 Appréciation bulletin (optionnel)
 ${app || "—"}`;
+}
+function gatesAreOk(gates){
+  return activeGateList(gates).length === 0;
+}
+function getAISuggestedDelta(aiObj){
+  const data = normalizeAIData(aiObj);
+  const cands = [
+    data?.overall?.score50_delta_suggestion,
+    data?.overall?.delta,
+    data?.delta,
+    data?.delta_suggere,
+    data?.deltas?.score50
+  ];
+  for(const c of cands){
+    const n = Number(c);
+    if(Number.isFinite(n)) return clamp(n, -2, 2);
+  }
+  return 0;
+}
+function applyAIScoreDelta(baseState, aiObj){
+  const baseScore50 = Number(baseState?.fin?.rubric50?.score50 ?? 0);
+  const gatesOk = gatesAreOk(baseState?.fin?.gates || {});
+  const delta = getAISuggestedDelta(aiObj);
+  const applied = gatesOk ? delta : 0;
+  const adjusted = clamp(baseScore50 + applied, 0, 50);
+  return {baseScore50, gatesOk, suggestedDelta: delta, appliedDelta: applied, adjustedScore50: adjusted};
 }
 const CALIB_KEY = "evaluator_v2_calibration_v1";
 const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
@@ -2449,9 +2581,11 @@ function makePayload(state){
   const student = (document.getElementById("student").value || "").trim();
   return {
     timestamp: new Date().toISOString(),
-    tool: "Evaluator-v2-severe",
+    tool: "Evaluator-v2",
     student,
     level,
+    refMode: getRefMode(),
+    thresholdsUsed: getRefMode(),
     weights: fin.weights,
     gates: fin.gates,
     thresholds: fin.levelCfg,
@@ -2788,6 +2922,16 @@ function bindEvt(id, evt, fn){ const el = document.getElementById(id); if(el) el
 
 const calToggle = document.getElementById("toggleCalibration");
 if(calToggle) calToggle.checked = isCalibrationEnabled();
+const refModeEl = document.getElementById("refMode");
+const savedRefMode = localStorage.getItem("evaluator_refMode");
+if(refModeEl){
+  const ref = ["eduscol","severe"].includes(savedRefMode || "") ? savedRefMode : "eduscol";
+  refModeEl.value = ref;
+  refModeEl.addEventListener("change", ()=>{
+    localStorage.setItem("evaluator_refMode", refModeEl.value || "eduscol");
+  });
+}
+
 const aiCfg = loadAICfg();
 const aiModeEl = document.getElementById("aiMode");
 const aiEndpointEl = document.getElementById("aiEndpoint");
@@ -2843,7 +2987,7 @@ document.getElementById("btnTestAI")?.addEventListener("click", async ()=>{
   const endpoint = (aiEndpointEl?.value || "").trim();
   if(!endpoint){ setStatus("Saisis un endpoint IA."); return; }
   setStatus("Test endpoint IA…");
-  const ping = await fetchAIReport(endpoint, {tool:"EVALUATORR", wanted:{jsonSchemaVersion:"1"}}, 12000);
+  const ping = await fetchAIReport(endpoint, {level:"4e", text:"Ping technique", local:{score50:0, modules:{}, gates:{}, traceLight:[]}, schema:"evaluatorr-v1"}, 12000);
   setStatus(ping.ok ? "Endpoint IA OK." : "Endpoint IA indisponible.");
 });
 
@@ -2858,7 +3002,7 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
 
     const aiMode = aiModeEl?.value || "OFF";
     const endpoint = (aiEndpointEl?.value || "").trim();
-    const minWords = LEVEL[level]?.minWords || 150;
+    const minWords = getLevelCfg(level)?.minWords || 150;
     if(base.m.words < minWords){
       setStatus(`IA non envoyée : texte trop court (<${minWords} mots). Offline OK.`);
       renderAIBox({diagnostic:"IA non sollicitée (seuil de mots non atteint).", conseils:["Allonger la copie avant appel IA."], reecritures:[]});
@@ -2875,10 +3019,27 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
       renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:["Conserver le diagnostic local."], reecritures:[]});
       return;
     }
-    renderAIBox(ai.data || {});
-    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
+    const aiPayload = normalizeAIData(ai.data || {});
+    renderAIBox(aiPayload);
+    const deltaInfo = applyAIScoreDelta(base, aiPayload);
+    const aiBox = document.getElementById("aiDiag");
+    if(aiBox){
+      aiBox.textContent += `\n\nDeltas suggérés IA\n- Delta suggéré: ${deltaInfo.suggestedDelta>=0?"+":""}${deltaInfo.suggestedDelta.toFixed(1)} /50\n- Gates: ${deltaInfo.gatesOk?"OK":"BLOQUANTS"}\n- Delta appliqué: ${deltaInfo.appliedDelta>=0?"+":""}${deltaInfo.appliedDelta.toFixed(1)} /50\n- Score enrichi (indicatif): ${deltaInfo.adjustedScore50.toFixed(1)}/50\n- Note déterministe conservée: ${deltaInfo.baseScore50.toFixed(1)}/50`;
+    }
+    storeAIReview(level, raw, base.m, base.fin, aiPayload);
+    storeAIMemory(raw, level, base.fin, {
+      ...aiPayload,
+      deltaApplied: deltaInfo.appliedDelta,
+      score50Enriched: deltaInfo.adjustedScore50,
+      score50Deterministic: deltaInfo.baseScore50
+    });
     if(saveAIHistoryEl?.checked){
-      if(window.__last?.fin) window.__last.fin.ai = ai.data;
+      if(window.__last?.fin) window.__last.fin.ai = {
+        ...aiPayload,
+        deltaApplied: deltaInfo.appliedDelta,
+        score50Enriched: deltaInfo.adjustedScore50,
+        score50Deterministic: deltaInfo.baseScore50
+      };
     }
     setStatus("Évaluation + IA terminée.");
   } catch(e){
