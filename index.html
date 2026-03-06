@@ -378,6 +378,22 @@
 
       <div class="hr"></div>
 
+      <h2>Lot (10–30 copies)</h2>
+      <div class="small">Sépare les copies par <span class="mono">---COPIE---</span> ou 3 lignes vides.</div>
+      <textarea id="batchText" style="min-height:180px" placeholder="Élève: Nom (optionnel)
+Texte...
+---COPIE---
+Élève: Autre
+Texte..."></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn secondary" id="btnBatchEval" type="button">Évaluer le lot</button>
+        <button class="btn secondary" id="btnBatchCsv" type="button">Exporter CSV lot</button>
+        <span class="pill" id="batchStatus">Lot inactif.</span>
+      </div>
+      <div class="out" id="batchTable" style="margin-top:10px">—</div>
+
+      <div class="hr"></div>
+
       <h2>Historique local</h2>
       <div class="row">
         <button class="btn secondary" id="btnSave">Sauver entrée</button>
@@ -2509,6 +2525,81 @@ function exportCSV(state){
   const csv = header.join(",") + "\n" + toCSVRow(row) + "\n";
   downloadFile("evaluator_v2_export.csv", csv, "text/csv;charset=utf-8");
 }
+let __batchResults = [];
+function splitBatchCopies(raw){
+  const src = normalizeText(raw || "");
+  if(!src.trim()) return [];
+  if(src.includes("---COPIE---")){
+    return src.split(/\n\s*---COPIE---\s*\n/g).map(x=>x.trim()).filter(Boolean);
+  }
+  return src.split(/\n\s*\n\s*\n+/g).map(x=>x.trim()).filter(Boolean);
+}
+function parseStudentFromCopy(txt){
+  const lines = String(txt || "").split(/\n+/);
+  const first = (lines[0] || "").trim();
+  const m = first.match(/^Élève\s*:\s*(.+)$/i);
+  if(!m) return {student:"", body:txt};
+  return {student:m[1].trim(), body:lines.slice(1).join("\n").trim()};
+}
+function renderBatchTable(rows){
+  const box = document.getElementById("batchTable");
+  if(!box) return;
+  if(!rows.length){ box.textContent = "—"; return; }
+  const head = `<tr><th>#</th><th>Élève</th><th>Mots</th><th>/20</th><th>/50</th><th>Priorités</th><th>Gates</th></tr>`;
+  const body = rows.map((r,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(r.student||"—")}</td><td>${r.words}</td><td>${r.score20.toFixed(1)}</td><td>${r.score50.toFixed(1)}</td><td>${escapeHtml((r.priorities||[]).join(" | ")||"—")}</td><td>${escapeHtml((r.gates||[]).join("|")||"—")}</td></tr>`).join("");
+  box.innerHTML = `<table class="rubric-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+async function evaluateBatch(){
+  const level = document.getElementById("level")?.value || "4e";
+  const raw = document.getElementById("batchText")?.value || "";
+  const copies = splitBatchCopies(raw);
+  const st = document.getElementById("batchStatus");
+  if(!copies.length){ if(st) st.textContent = "Aucune copie détectée."; return; }
+  __batchResults = [];
+  if(st) st.textContent = `Traitement lot: 0/${copies.length}`;
+  const chunk = 4;
+  for(let i=0;i<copies.length;i+=chunk){
+    for(const c of copies.slice(i,i+chunk)){
+      const parsed = parseStudentFromCopy(c);
+      const body = normalizeText(parsed.body || "");
+      if(!body) continue;
+      const m = computeMetrics(body);
+      const p1 = scorePass1(m, level);
+      const p2 = scorePass2(m, level);
+      const fin = buildFinal(m, p1, p2, level, body);
+      __batchResults.push({
+        timestamp: new Date().toISOString(),
+        level,
+        student: parsed.student,
+        words: m.words,
+        score20: fin.final,
+        score50: fin.rubric50?.score50 ?? 0,
+        modules: fin.rubric50?.modules || {},
+        gates: Object.entries(fin.gates||{}).filter(([,v])=>v).map(([k])=>k),
+        priorities: (fin.rewritePlan||[]).slice(0,3).map(x=>x.title)
+      });
+    }
+    renderBatchTable(__batchResults);
+    if(st) st.textContent = `Traitement lot: ${Math.min(i+chunk,copies.length)}/${copies.length}`;
+    await new Promise(r=>setTimeout(r,0));
+  }
+  if(st) st.textContent = `Lot terminé: ${__batchResults.length} copie(s).`;
+}
+function exportBatchCSV(){
+  if(!__batchResults.length) return;
+  const h = ["timestamp","level","student","words","score20","score50","mod_langue","mod_narration","mod_description","mod_dialogues","mod_style","mod_temps_lieu","mod_lexique","mod_cohesion","mod_coherence","gate_noEndPunct","gate_tooShort","gate_paragraphGate","gate_sensesGate","gate_timePlaceGate","gate_wallTextGate","priority1","priority2","priority3"];
+  const rows = __batchResults.map(r=>toCSVRow([
+    r.timestamp, r.level, r.student||"", r.words, r.score20, r.score50,
+    r.modules.langue?.score ?? 0, r.modules.narration?.score ?? 0, r.modules.description?.score ?? 0,
+    r.modules.dialogues?.score ?? 0, r.modules.style?.score ?? 0, r.modules.temps_lieu?.score ?? 0,
+    r.modules.lexique?.score ?? 0, r.modules.cohesion?.score ?? 0, r.modules.coherence?.score ?? 0,
+    r.gates.includes("noEndPunct")?1:0, r.gates.includes("tooShort")?1:0, r.gates.includes("paragraphGate")?1:0,
+    r.gates.includes("sensesGate")?1:0, r.gates.includes("timePlaceGate")?1:0, r.gates.includes("wallTextGate")?1:0,
+    r.priorities?.[0]||"", r.priorities?.[1]||"", r.priorities?.[2]||""
+  ]));
+  downloadFile("evaluator_v2_batch.csv", h.join(",")+"\n"+rows.join("\n")+"\n", "text/csv;charset=utf-8");
+}
+
 
 /* ========= Historique local ========= */
 const HIST_KEY = "evaluator_v2_history";
@@ -2885,6 +2976,16 @@ bindEvt("btnExportCsv","click", ()=>{
   if(!last){ setStatus("Évalue un texte d’abord."); return; }
   exportCSV(last);
   setStatus("CSV exporté.");
+});
+
+bindEvt("btnBatchEval","click", async ()=>{
+  await evaluateBatch();
+});
+
+bindEvt("btnBatchCsv","click", ()=>{
+  if(!__batchResults.length){ setStatus("Aucun résultat lot à exporter."); return; }
+  exportBatchCSV();
+  setStatus("CSV lot exporté.");
 });
 
 bindEvt("btnSave","click", ()=>{
