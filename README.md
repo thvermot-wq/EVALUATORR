@@ -9,6 +9,11 @@ I’d build an AI “rewriting coach” for teachers: it doesn’t write for stu
 
 ---
 
+## Style charter
+- A persistent editorial style guide for generated text is defined in `AGENTS.md` (root).
+
+---
+
 ## Versioning
 
 - **v1.0**: initial prototype (single-file evaluator, basic heuristics)
