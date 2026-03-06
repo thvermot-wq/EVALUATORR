@@ -1155,14 +1155,17 @@ function computeMetrics(raw){
     contentRepeatScore
   };
 
-  // Cohésion v2
+  // Cohésion v3
   const pronounSet = new Set(COH_PRONOUNS);
   const detSet = new Set(COH_DETERMINERS);
+  const weakVerbSetCoh = new Set(WEAK_VERBS_FORMS);
   let pronounRunMax = 0, curRun = 0;
   const nounishIndices = [];
   for(let i=0;i<tokens.length;i++){
     const tk = tokens[i];
     if(i>0 && detSet.has(tokens[i-1])) nounishIndices.push(i);
+    const nounish2 = tk.length >= 4 && !STOP_FR.has(tk) && !pronounSet.has(tk) && !weakVerbSetCoh.has(tk);
+    if(nounish2) nounishIndices.push(i);
     if(pronounSet.has(tk) && !IGNORE_PRON_RUN.has(tk)){
       curRun += 1;
       if(curRun > pronounRunMax) pronounRunMax = curRun;
@@ -2208,38 +2211,103 @@ function scoreLexiqueV3(level, m){
 }
 
 
-function scoreCohesionV2(level, m){
+function scoreCohesionV3(level, m){
   const max = 4;
-  let score = 2.8;
-  const signals = [];
-  const evidence = [];
   const gapThreshold = (level === "5e") ? 4 : 3;
+  const parasN = Number(m.paras?.length || 0);
 
+  const breakdown = {
+    referents:{score:1.2, max:1.5, signals:[], evidence:[]},
+    reprises:{score:0, max:1.0, signals:[], evidence:[]},
+    pronounRuns:{score:0.5, max:0.5, signals:[], evidence:[]},
+    continuity:{score:0, max:1.0, signals:[], evidence:[]}
+  };
+
+  // A) referents /1.5
   if((m.coh?.gapCount || 0) >= gapThreshold){
-    score -= 0.8;
-    signals.push(`Référents flous (${m.coh.gapCount})`);
+    breakdown.referents.score -= 0.8;
+    breakdown.referents.signals.push(`Référents flous (${m.coh?.gapCount || 0})`);
   }
-  if((m.coh?.pronounRunMax || 0) >= 4){
-    score -= 0.6;
-    signals.push(`Série de pronoms (${m.coh.pronounRunMax})`);
+  if((m.coh?.gapCount || 0) === 0){
+    breakdown.referents.score += 0.3;
+    breakdown.referents.signals.push("Référents stables");
   }
+  breakdown.referents.score = clamp(breakdown.referents.score, 0, breakdown.referents.max);
+
+  // B) reprises /1.0
+  const zeroTransitions = Number(m.coh?.paragraphContinuity?.zeroTransitions || 0);
+  if(parasN >= 2){
+    if(zeroTransitions === 0){
+      breakdown.reprises.score = 0.6;
+      breakdown.reprises.signals.push("Reprises inter-paragraphes nettes");
+    } else if(zeroTransitions === 1){
+      breakdown.reprises.score = 0.2;
+      breakdown.reprises.signals.push("Une transition fragile");
+    } else {
+      breakdown.reprises.score = 0;
+      breakdown.reprises.signals.push("Reprises inter-paragraphes faibles");
+    }
+  } else {
+    breakdown.reprises.score = 0.5;
+    breakdown.reprises.signals.push("Texte mono-paragraphe (neutre)");
+  }
+  breakdown.reprises.score = clamp(breakdown.reprises.score, 0, breakdown.reprises.max);
+
+  // C) pronounRuns /0.5
+  const run = Number(m.coh?.pronounRunMax || 0);
+  if(run <= 2){
+    breakdown.pronounRuns.score = 0.5;
+    breakdown.pronounRuns.signals.push(`Pronoms maîtrisés (${run})`);
+  } else if(run === 3){
+    breakdown.pronounRuns.score = 0.2;
+    breakdown.pronounRuns.signals.push("Série pronominale moyenne");
+  } else {
+    breakdown.pronounRuns.score = 0;
+    breakdown.pronounRuns.signals.push(`Série de pronoms longue (${run})`);
+  }
+
+  // D) continuity /1.0
   if(m.coh?.paragraphContinuity?.broken){
-    score -= 0.4;
-    signals.push("Rupture thématique inter-paragraphes");
+    breakdown.continuity.score -= 0.4;
+    breakdown.continuity.signals.push("Rupture thématique détectée");
   }
-  const minConn = Number(RUBRIC_CFG.levelTuning?.[level]?.minConnectors ?? 1);
-  if((m.lex?.connectorsUnique || 0) >= minConn){
-    score += 0.4;
-    signals.push(`Chaînage présent (${m.lex.connectorsUnique} connecteurs)`);
+  if(parasN >= 3 && zeroTransitions === 0){
+    breakdown.continuity.score += 0.4;
+    breakdown.continuity.signals.push("Continuité forte sur plusieurs paragraphes");
+  } else {
+    breakdown.continuity.score += 0.2;
+    breakdown.continuity.signals.push("Continuité minimale");
   }
+  breakdown.continuity.score = clamp(breakdown.continuity.score, 0, breakdown.continuity.max);
 
-  for(const ev of (m.coh?.gapEvidence || []).slice(0,2)) evidence.push(ev);
+  // Evidence
+  for(const ev of (m.coh?.gapEvidence || []).slice(0,2)) breakdown.referents.evidence.push(ev);
   if(m.coh?.paragraphContinuity?.broken && m.coh?.paragraphContinuity?.evidence){
-    evidence.push({start:0,end:0,excerpt:m.coh.paragraphContinuity.evidence});
+    breakdown.continuity.evidence.push({start:0,end:0,excerpt:m.coh.paragraphContinuity.evidence});
   }
 
-  return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,3), evidence: evidence.slice(0,3)};
+  const score = roundToHalf(
+    breakdown.referents.score +
+    breakdown.reprises.score +
+    breakdown.pronounRuns.score +
+    breakdown.continuity.score
+  );
+
+  const signals = [
+    ...breakdown.referents.signals,
+    ...breakdown.reprises.signals,
+    ...breakdown.pronounRuns.signals,
+    ...breakdown.continuity.signals
+  ].slice(0,5);
+
+  const evidence = [
+    ...breakdown.referents.evidence,
+    ...breakdown.continuity.evidence
+  ].filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+
+  return {score: clamp(score, 0, max), max, breakdown, signals, evidence};
 }
+
 
 function scoreCoherenceV2(level, m){
   const max = 4;
@@ -2381,12 +2449,13 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
 
   // métriques d'appoint pour modules peu couverts
-  const cohesionV2 = scoreCohesionV2(level, m);
-  modules.cohesion.score = cohesionV2.score;
-  modules.cohesion.max = cohesionV2.max;
-  modules.cohesion.signals = cohesionV2.signals || [];
-  modules.cohesion.evidence = cohesionV2.evidence || [];
-  modules.cohesion.traceIds.push("cohesion_v2");
+  const cohesionV3 = scoreCohesionV3(level, m);
+  modules.cohesion.score = cohesionV3.score;
+  modules.cohesion.max = cohesionV3.max;
+  modules.cohesion.signals = cohesionV3.signals || [];
+  modules.cohesion.evidence = cohesionV3.evidence || [];
+  modules.cohesion.breakdown = cohesionV3.breakdown;
+  modules.cohesion.traceIds.push("cohesion_v3");
 
   const minCausal = Number(tuning.minCausal ?? 0);
   if((m.turnsCount || 0) >= minCausal) modules.narration.score += 0.4;
