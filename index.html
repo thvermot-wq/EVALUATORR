@@ -1353,6 +1353,8 @@ function computeMetrics(raw){
     const second = placeEvidencePack.evidence[1]?.excerpt || "";
     placeLeapEvidence = {start:0, end:0, excerpt: `${first} ⟶ ${second}`};
   }
+  const tailSents = (sents || []).slice(-2).join(" ");
+  const closureHit = /(finalement|à la fin|enfin|désormais|depuis ce jour|à partir de ce jour)/i.test(tailSents);
   const coherence = {
     causalCount: causalPack.count,
     causalEvidence: causalPack.evidence,
@@ -1364,6 +1366,7 @@ function computeMetrics(raw){
     placeEvidences: placeEvidencePack.evidence,
     placeLeapHeuristic,
     placeLeapEvidence,
+    closureHit,
     verbsCount
   };
 
@@ -2309,40 +2312,88 @@ function scoreCohesionV3(level, m){
 }
 
 
-function scoreCoherenceV2(level, m){
+function scoreCoherenceV3(level, m){
   const max = 4;
-  let score = 2.6;
-  const signals = [];
-  const evidence = [];
   const tuning = RUBRIC_CFG.levelTuning?.[level] || {};
   const minCausal = Number(tuning.minCausal ?? 0);
   const causalCount = Number(m.coherence?.causalCount || 0);
   const seqPer100 = Number(m.coherence?.seqPer100 || 0);
   const verbsCount = Number(m.coherence?.verbsCount || 0);
+  const motionCount = Number(m.coherence?.motionCount || 0);
+  const placeEvidenceN = Number((m.coherence?.placeEvidences || []).length || 0);
 
+  const breakdown = {
+    causal:{score:1.0, max:1.5, signals:[], evidence:[]},
+    chronology:{score:0.6, max:1.0, signals:[], evidence:[]},
+    spatial:{score:0.7, max:1.0, signals:[], evidence:[]},
+    closure:{score:0.2, max:0.5, signals:[], evidence:[]}
+  };
+
+  // A) causal /1.5
   if((level === "4e" || level === "3e") && causalCount < minCausal){
-    score -= 0.8;
-    signals.push(`Liens causaux faibles (${causalCount})`);
-  }
-  if(seqPer100 < 0.8 && verbsCount > 0.12){
-    score -= 0.4;
-    signals.push(`Chronologie peu lisible (${seqPer100.toFixed(1)}/100)`);
-  }
-  if(m.coherence?.placeLeapHeuristic){
-    score -= 0.6;
-    signals.push("Changement de lieu sans déplacement explicite");
+    breakdown.causal.score -= 0.8;
+    breakdown.causal.signals.push(`Liens causaux faibles (${causalCount})`);
   }
   if(causalCount >= 2){
-    score += 0.4;
-    signals.push(`Causalité explicite (${causalCount})`);
+    breakdown.causal.score += 0.5;
+    breakdown.causal.signals.push(`Causalité explicite (${causalCount})`);
   }
+  breakdown.causal.score = clamp(breakdown.causal.score, 0, breakdown.causal.max);
 
-  for(const ev of (m.coherence?.causalEvidence || []).slice(0,1)) evidence.push(ev);
-  for(const ev of (m.coherence?.sequenceEvidence || []).slice(0,1)) evidence.push(ev);
-  if(m.coherence?.placeLeapHeuristic && m.coherence?.placeLeapEvidence) evidence.push(m.coherence.placeLeapEvidence);
+  // B) chronology /1.0
+  if(seqPer100 < 0.8 && verbsCount > 0.12){
+    breakdown.chronology.score -= 0.4;
+    breakdown.chronology.signals.push(`Chronologie faible (${seqPer100.toFixed(1)}/100)`);
+  }
+  if(seqPer100 >= 1.2){
+    breakdown.chronology.score += 0.4;
+    breakdown.chronology.signals.push(`Chronologie lisible (${seqPer100.toFixed(1)}/100)`);
+  }
+  breakdown.chronology.score = clamp(breakdown.chronology.score, 0, breakdown.chronology.max);
 
-  return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,3), evidence: evidence.slice(0,3)};
+  // C) spatial /1.0
+  if(m.coherence?.placeLeapHeuristic){
+    breakdown.spatial.score -= 0.6;
+    breakdown.spatial.signals.push("Téléportation spatiale probable");
+  }
+  if(motionCount >= 1 && placeEvidenceN >= 1){
+    breakdown.spatial.score += 0.3;
+    breakdown.spatial.signals.push("Déplacements spatiaux explicites");
+  }
+  breakdown.spatial.score = clamp(breakdown.spatial.score, 0, breakdown.spatial.max);
+
+  // D) closure /0.5
+  breakdown.closure.score = m.coherence?.closureHit ? 0.5 : 0.2;
+  breakdown.closure.signals.push(m.coherence?.closureHit ? "Fermeture narrative détectée" : "Fermeture implicite");
+
+  // Evidence
+  for(const ev of (m.coherence?.causalEvidence || []).slice(0,1)) breakdown.causal.evidence.push(ev);
+  for(const ev of (m.coherence?.sequenceEvidence || []).slice(0,1)) breakdown.chronology.evidence.push(ev);
+  if(m.coherence?.placeLeapHeuristic && m.coherence?.placeLeapEvidence) breakdown.spatial.evidence.push(m.coherence.placeLeapEvidence);
+
+  const score = roundToHalf(
+    breakdown.causal.score +
+    breakdown.chronology.score +
+    breakdown.spatial.score +
+    breakdown.closure.score
+  );
+
+  const signals = [
+    ...breakdown.causal.signals,
+    ...breakdown.chronology.signals,
+    ...breakdown.spatial.signals,
+    ...breakdown.closure.signals
+  ].slice(0,5);
+
+  const evidence = [
+    ...breakdown.causal.evidence,
+    ...breakdown.chronology.evidence,
+    ...breakdown.spatial.evidence
+  ].filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+
+  return {score: clamp(score, 0, max), max, breakdown, signals, evidence};
 }
+
 
 function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const {gates} = computeGates(m, level);
@@ -2460,12 +2511,13 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const minCausal = Number(tuning.minCausal ?? 0);
   if((m.turnsCount || 0) >= minCausal) modules.narration.score += 0.4;
 
-  const coherenceV2 = scoreCoherenceV2(level, m);
-  modules.coherence.score = coherenceV2.score;
-  modules.coherence.max = coherenceV2.max;
-  modules.coherence.signals = coherenceV2.signals || [];
-  modules.coherence.evidence = coherenceV2.evidence || [];
-  modules.coherence.traceIds.push("coherence_v2");
+  const coherenceV3 = scoreCoherenceV3(level, m);
+  modules.coherence.score = coherenceV3.score;
+  modules.coherence.max = coherenceV3.max;
+  modules.coherence.signals = coherenceV3.signals || [];
+  modules.coherence.evidence = coherenceV3.evidence || [];
+  modules.coherence.breakdown = coherenceV3.breakdown;
+  modules.coherence.traceIds.push("coherence_v3");
 
   const lexV3 = scoreLexiqueV3(level, m);
   modules.lexique.score = lexV3.score;
@@ -2496,8 +2548,10 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
 
   let score60 = roundToHalf(Object.values(modules).reduce((a,x)=>a+x.score,0));
   const capsApplied = [];
+  const refModeNow = getRefMode();
   for(const [gate,conf] of Object.entries(GATE_CAPS_50)){
     if(!gates?.[gate]) continue;
+    if(refModeNow === "eduscol" && (gate === "sensesGate" || gate === "timePlaceGate")) continue;
     const cap50 = conf.cap50ByLevel ? conf.cap50ByLevel[level] : conf.cap50;
     const cap60 = roundToHalf((cap50 / 50) * (cfg.totals?.total || 60));
     capsApplied.push({gate, cap60, reason: conf.reason});
@@ -2709,6 +2763,7 @@ function buildFinal(m, p1, p2, level, raw){
   rubric.score60_raw = score60_raw;
   rubric.score60 = score60;
   rubric.capsApplied60 = canon.capsApplied60;
+  rubric.capsApplied = canon.capsApplied60;
   const score20 = score20From60(score60);
   const final = score20;
 
