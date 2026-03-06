@@ -2096,37 +2096,117 @@ function parseDialogueInfo(raw, m){
 }
 
 
-function scoreLexiqueV2(level, m){
+function scoreLexiqueV3(level, m){
   const tuning = RUBRIC_CFG.levelTuning?.[level] || {};
-  const max = 7;
-  let score = 4.0;
-  const signals = [];
-  const evidence = [];
-
+  const minMattrOk = Number(tuning.minMattrOk ?? 0.63);
+  const minConnectors = Number(tuning.minConnectors ?? 1);
   const hapaxTarget = level === "5e" ? 0.30 : 0.35;
   const connDensityTarget = level === "5e" ? 1.0 : 1.5;
   const weakVerbMax = level === "5e" ? 0.08 : 0.06;
   const repeatLimit = Number(tuning.maxTopWordShare ?? 0.20) + 0.08;
 
-  if((m.mattr || 0) >= Number(tuning.minMattrOk ?? 0.63)){ score += 0.5; signals.push(`MATTR OK (${m.mattr.toFixed(2)})`); }
-  if((m.lex?.hapaxRatio || 0) >= hapaxTarget){ score += 0.5; signals.push(`Hapax robuste (${(m.lex.hapaxRatio*100).toFixed(0)}%)`); }
-  if((m.lex?.connectorsUnique || 0) >= Number(tuning.minConnectors ?? 1)){ score += 0.5; signals.push(`Connecteurs variés (${m.lex.connectorsUnique})`); }
-  if((m.lex?.connectorsDensity || 0) >= connDensityTarget){ score += 0.5; signals.push(`Connecteurs denses (${m.lex.connectorsDensity.toFixed(1)}/100)`); }
+  const breakdown = {
+    diversity: {score:0, max:2.0, signals:[], evidence:[]},
+    connectors:{score:0, max:1.5, signals:[], evidence:[]},
+    verbPrecision:{score:1.2, max:2.0, signals:[], evidence:[]},
+    repeatsParasites:{score:0, max:1.5, signals:[], evidence:[]}
+  };
 
-  if((m.lex?.weakVerbRate || 0) > weakVerbMax){ score -= 0.7; signals.push(`Verbes faibles élevés (${(m.lex.weakVerbRate*100).toFixed(1)}%)`); }
-  if((m.lex?.intensifierRate || 0) > 0.03){ score -= 0.5; signals.push(`Intensifieurs fréquents (${(m.lex.intensifierRate*100).toFixed(1)}%)`); }
-  if((m.lex?.contentRepeatScore || 0) > repeatLimit){ score -= 0.8; signals.push(`Répétitions lexicales (${(m.lex.contentRepeatScore*100).toFixed(1)}%)`); }
+  // A) diversity /2.0
+  if((m.mattr || 0) >= minMattrOk){
+    breakdown.diversity.score += 1.0;
+    breakdown.diversity.signals.push(`MATTR suffisant (${(m.mattr||0).toFixed(2)})`);
+  }
+  if((m.lex?.hapaxRatio || 0) >= hapaxTarget){
+    breakdown.diversity.score += 0.6;
+    breakdown.diversity.signals.push(`Hapax solide (${((m.lex?.hapaxRatio||0)*100).toFixed(0)}%)`);
+  }
+  if((m.lex?.longWordRatio || 0) >= 0.08){
+    breakdown.diversity.score += 0.4;
+    breakdown.diversity.signals.push(`Mots longs utiles (${((m.lex?.longWordRatio||0)*100).toFixed(1)}%)`);
+  }
+  breakdown.diversity.score = clamp(breakdown.diversity.score, 0, breakdown.diversity.max);
 
-  const rep = (m.lex?.contentTop8 || []).filter(([,n])=>n>=2).slice(0,2);
-  for(const [w] of rep){ evidence.push(...pickEvidence(m.text, w, 1)); }
-  const weakCandidates = Object.entries((m.freq||{})).filter(([w,n])=>new Set(WEAK_VERBS_FORMS).has(w) && n>=1).slice(0,2);
-  for(const [w] of weakCandidates){ evidence.push(...pickEvidence(m.text, w, 1)); }
-  for(const ev of (m.lex?.connectorEvidence || []).slice(0,2)){ evidence.push(ev); }
+  // B) connectors /1.5
+  if((m.lex?.connectorsUnique || 0) >= minConnectors){
+    breakdown.connectors.score += 0.8;
+    breakdown.connectors.signals.push(`Connecteurs variés (${m.lex.connectorsUnique})`);
+  }
+  if((m.lex?.connectorsDensity || 0) >= connDensityTarget){
+    breakdown.connectors.score += 0.7;
+    breakdown.connectors.signals.push(`Densité connecteurs OK (${(m.lex.connectorsDensity||0).toFixed(1)}/100)`);
+  }
+  for(const ev of (m.lex?.connectorEvidence || []).slice(0,1)) breakdown.connectors.evidence.push(ev);
+  breakdown.connectors.score = clamp(breakdown.connectors.score, 0, breakdown.connectors.max);
 
-  if((m.lex?.longWordRatio || 0) >= 0.08){ score += 0.2; signals.push(`Lexique précis (mots longs ${(m.lex.longWordRatio*100).toFixed(1)}%)`); }
+  // C) verbPrecision /2.0
+  if((m.lex?.weakVerbRate || 0) > weakVerbMax){
+    breakdown.verbPrecision.score -= 0.8;
+    breakdown.verbPrecision.signals.push(`Verbes faibles trop présents (${((m.lex?.weakVerbRate||0)*100).toFixed(1)}%)`);
+    const weakCandidates = Object.entries((m.freq||{})).filter(([w,n])=>new Set(WEAK_VERBS_FORMS).has(w) && n>=1).slice(0,1);
+    for(const [w] of weakCandidates){ breakdown.verbPrecision.evidence.push(...pickEvidence(m.text, w, 1)); }
+  }
+  if((m.lex?.intensifierRate || 0) <= 0.03){
+    breakdown.verbPrecision.score += 0.8;
+    breakdown.verbPrecision.signals.push("Intensifieurs maîtrisés");
+  } else {
+    breakdown.verbPrecision.score -= 0.5;
+    breakdown.verbPrecision.signals.push(`Intensifieurs excessifs (${((m.lex?.intensifierRate||0)*100).toFixed(1)}%)`);
+  }
+  breakdown.verbPrecision.score = clamp(breakdown.verbPrecision.score, 0, breakdown.verbPrecision.max);
 
-  return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,4), evidence: evidence.slice(0,4)};
+  // D) repeatsParasites /1.5
+  if((m.lex?.contentRepeatScore || 0) <= repeatLimit){
+    breakdown.repeatsParasites.score += 0.7;
+    breakdown.repeatsParasites.signals.push("Répétitions lexicales contenues");
+  } else {
+    breakdown.repeatsParasites.score -= 0.8;
+    breakdown.repeatsParasites.signals.push(`Répétitions lexicales hautes (${((m.lex?.contentRepeatScore||0)*100).toFixed(1)}%)`);
+    const topWord = (m.lex?.contentTop8 || [])[0]?.[0];
+    if(topWord) breakdown.repeatsParasites.evidence.push(...pickEvidence(m.text, topWord, 1));
+  }
+
+  const vaguePer100 = (m.words || 0) ? ((m.vagueCount || 0) / m.words) * 100 : 0;
+  if(vaguePer100 <= 0.6){
+    breakdown.repeatsParasites.score += 0.4;
+    breakdown.repeatsParasites.signals.push(`Mots vagues contenus (${vaguePer100.toFixed(2)}/100)`);
+  } else {
+    breakdown.repeatsParasites.score -= 0.5;
+    breakdown.repeatsParasites.signals.push(`Mots vagues élevés (${vaguePer100.toFixed(2)}/100)`);
+  }
+
+  if((m.repeatsNear || []).length === 0){
+    breakdown.repeatsParasites.score += 0.4;
+    breakdown.repeatsParasites.signals.push("Pas de redites proches")
+  } else {
+    breakdown.repeatsParasites.score -= 0.2;
+    breakdown.repeatsParasites.signals.push(`Redites proches (${(m.repeatsNear||[]).length})`);
+  }
+  breakdown.repeatsParasites.score = clamp(breakdown.repeatsParasites.score, 0, breakdown.repeatsParasites.max);
+
+  const score = roundToHalf(
+    breakdown.diversity.score +
+    breakdown.connectors.score +
+    breakdown.verbPrecision.score +
+    breakdown.repeatsParasites.score
+  );
+
+  const signals = [
+    ...breakdown.diversity.signals,
+    ...breakdown.connectors.signals,
+    ...breakdown.verbPrecision.signals,
+    ...breakdown.repeatsParasites.signals
+  ].slice(0,5);
+
+  const evidence = [
+    ...breakdown.repeatsParasites.evidence,
+    ...breakdown.verbPrecision.evidence,
+    ...breakdown.connectors.evidence
+  ].filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+
+  return {score: clamp(score, 0, 7), max:7, breakdown, signals, evidence};
 }
+
 
 function scoreCohesionV2(level, m){
   const max = 4;
@@ -2318,12 +2398,13 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   modules.coherence.evidence = coherenceV2.evidence || [];
   modules.coherence.traceIds.push("coherence_v2");
 
-  const lexV2 = scoreLexiqueV2(level, m);
-  modules.lexique.score = lexV2.score;
-  modules.lexique.max = lexV2.max;
-  modules.lexique.signals = lexV2.signals || [];
-  modules.lexique.evidence = lexV2.evidence || [];
-  modules.lexique.traceIds.push("lexique_v2");
+  const lexV3 = scoreLexiqueV3(level, m);
+  modules.lexique.score = lexV3.score;
+  modules.lexique.max = lexV3.max;
+  modules.lexique.signals = lexV3.signals || [];
+  modules.lexique.evidence = lexV3.evidence || [];
+  modules.lexique.breakdown = lexV3.breakdown;
+  modules.lexique.traceIds.push("lexique_v3");
 
   const traceById = new Map((trace||[]).map(t=>[t.ruleId, t]));
   for(const v of Object.values(modules)){
