@@ -2204,6 +2204,11 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
 
   const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[],signals:[],evidence:[]}]));
 
+  // Bases modulaires (60% du max) pour permettre bonus ET malus visibles
+  modules.dialogues.score = roundToHalf(modules.dialogues.max * 0.60);
+  modules.description.score = roundToHalf(modules.description.max * 0.60);
+  modules.temps_lieu.score = roundToHalf(modules.temps_lieu.max * 0.60);
+
   const tuning = cfg.levelTuning?.[level] || {};
 
   function add(module, traceItemObj, gain){
@@ -2249,8 +2254,7 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   if(dialogueInfo.bascule){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_bascule", +0.8, "Bascule dialoguée détectée.", dialogueInfo.evidence?.bascule||[])); }
   if(dialogueInfo.sortie){ dialogueGain += 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_sortie", +0.9, "Sortie de dialogue avec décision/tension.", dialogueInfo.evidence?.sortie||[])); }
   if(!dialogueInfo.quoteBalanced){ dialogueGain -= 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.9, "Guillemets non équilibrés.", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
-  dialogueGain = clamp(dialogueGain, 0, modules.dialogues.max);
-  modules.dialogues.score += dialogueGain;
+  modules.dialogues.score = clamp(modules.dialogues.score + dialogueGain, 0, modules.dialogues.max);
   modules.dialogues.traceIds.push(...dialogueTrace.map(x=>x.ruleId));
 
   const descTrace = [];
@@ -2275,7 +2279,7 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   } else {
     descGain += 0.6;
   }
-  modules.description.score += clamp(descGain, 0, modules.description.max);
+  modules.description.score = clamp(modules.description.score + descGain, 0, modules.description.max);
   modules.description.traceIds.push(...descTrace.map(x=>x.ruleId));
 
   const tlTrace = [];
@@ -2293,7 +2297,7 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   } else {
     tlGain -= 0.6;
   }
-  modules.temps_lieu.score += clamp(tlGain, 0, modules.temps_lieu.max);
+  modules.temps_lieu.score = clamp(modules.temps_lieu.score + tlGain, 0, modules.temps_lieu.max);
   modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
 
   // métriques d'appoint pour modules peu couverts
