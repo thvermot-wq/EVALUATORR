@@ -338,11 +338,12 @@
           <div class="val" id="finalScore">—</div>
           <div class="bar"><div id="finalBar"></div></div>
           <div class="small" id="finalVerdict">—</div>
+          <div class="small" id="final20Hint">Le /20 est l’équivalent exact du /60 (score60/3).</div>
         </div>
         <div class="box">
           <div class="lab">Scores des passes</div>
           <div class="val mono" id="passScores">—</div>
-          <div class="small" id="passHint">Passe 1 /10 + Passe 2 /10 → pondération → /20</div>
+          <div class="small" id="passHint">Diagnostic legacy : Passe 1 /10 + Passe 2 /10 (+ excellence)</div>
         </div>
       </div>
 
@@ -593,6 +594,22 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m]));
 }
 function roundToHalf(x){ return Math.round(x*2)/2; }
+function score20From60(score60){ return Number((Number(score60||0)/3).toFixed(2)); }
+function cap60From20(cap20){ return Number(cap20||0) * 3; }
+function applyHardCaps60(score60, gates, level, refMode){
+  let out = Number(score60||0);
+  const caps = [];
+  if(gates?.noEndPunct){ const cap = cap60From20(9.5); out = Math.min(out, cap); caps.push({gate:"noEndPunct", cap60:cap}); }
+  if(gates?.tooShort){
+    const cap20 = (level==="3e") ? 11 : (level==="4e") ? 12 : 13;
+    const cap = cap60From20(cap20); out = Math.min(out, cap); caps.push({gate:"tooShort", cap60:cap});
+  }
+  if(gates?.paragraphGate){ const cap = cap60From20(14); out = Math.min(out, cap); caps.push({gate:"paragraphGate", cap60:cap}); }
+  if(gates?.wallTextGate){ const cap = cap60From20(14); out = Math.min(out, cap); caps.push({gate:"wallTextGate", cap60:cap}); }
+  if(refMode === "severe" && gates?.sensesGate){ const cap = cap60From20(14); out = Math.min(out, cap); caps.push({gate:"sensesGate", cap60:cap}); }
+  if(refMode === "severe" && (gates?.ancrageMissing || gates?.timePlaceGate)){ const cap = cap60From20(14); out = Math.min(out, cap); caps.push({gate:"timePlaceGate", cap60:cap}); }
+  return {score60: roundToHalf(out), capsApplied60: caps};
+}
 
 /** @typedef {{start:number,end:number,excerpt:string}} Evidence */
 /** @typedef {{module:string,ruleId:string,delta:number,message:string,evidence?:Evidence[]}} TraceItem */
@@ -2456,6 +2473,9 @@ function buildFinal(m, p1, p2, level, raw){
   const rubric = scoreRubric(level, m, p1, p2, p3, {trace:[...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[])]});
   const calib50 = computeCalibrated50(level, rubric.rubric50_legacy, gates);
 
+  audit.push("— Note canonique —");
+  audit.push(`Rubric officiel : ${(rubric.score60 ?? 0).toFixed(1)}/60 (équiv. ${score20From60(rubric.score60 ?? 0).toFixed(2)}/20).`);
+  audit.push("— Diagnostic /20 (legacy) —");
   audit.push("— Passe 1 (forme) —");
   audit.push(...p1.audit);
   audit.push("— Passe 2 (contenu) —");
@@ -2483,52 +2503,71 @@ function buildFinal(m, p1, p2, level, raw){
   const rec = (level==="5e") ? "Reco niveau : 60/40 (forme/contenu)." : (level==="4e") ? "Reco niveau : 55/45." : "Reco niveau : 50/50 (ou 45/55).";
   audit.push(rec);
 
-  // Score pondéré /20
-  let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
-  const score20_raw = final;
+  // Score diagnostic /20 (legacy)
+  let diag20 = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
+  const diag20_raw = diag20;
 
   // Plafonds finaux
   const refMode = getRefMode();
   if(gates.noEndPunct){
-    final = Math.min(final, 9.5);
+    diag20 = Math.min(diag20, 9.5);
     audit.push("Plafond : aucune ponctuation de fin de phrase (. ! ?) ⇒ note ≤ 9,5/20.");
   }
   if(gates.tooShort){
     const cap = (level==="3e") ? 11.0 : (level==="4e") ? 12.0 : 13.0;
-    final = Math.min(final, cap);
+    diag20 = Math.min(diag20, cap);
     audit.push(`Plafond : texte trop court (<${L.minWords} mots) ⇒ note ≤ ${cap}/20.`);
   }
   if(gates.paragraphGate){
-    final = Math.min(final, 14.0);
+    diag20 = Math.min(diag20, 14.0);
     audit.push("Plafond : segmentation insuffisante (paragraphes) ⇒ note ≤ 14/20.");
   }
   if(gates.wallTextGate){
-    final = Math.min(final, 14.0);
+    diag20 = Math.min(diag20, 14.0);
     audit.push("Plafond : mur de texte ⇒ note ≤ 14/20.");
   }
   if(refMode === "severe" && gates.sensesGate){
-    final = Math.min(final, 14.0);
+    diag20 = Math.min(diag20, 14.0);
     audit.push("Plafond : sensoriel insuffisant ⇒ note ≤ 14/20.");
   }
   if(refMode === "severe" && gates.ancrageMissing){
-    final = Math.min(final, 14.0);
+    diag20 = Math.min(diag20, 14.0);
     audit.push("Plafond : ancrage temps/lieu insuffisant ⇒ note ≤ 14/20.");
   }
 
   if((m.dialogue?.nbRepliques || 0) >= 3 && (m.dialogue?.dashMajRatio || 0) >= 0.75 && p1.parts.pseg < 2.0){
-    const before = final;
-    final = Math.min(20, roundToHalf(final + 0.5));
-    if(final > before) audit.push("Ajustement dialogue : segmentation dialoguée saine, malus langue atténué (+0,5). ");
+    const before = diag20;
+    diag20 = Math.min(20, roundToHalf(diag20 + 0.5));
+    if(diag20 > before) audit.push("Ajustement dialogue : segmentation dialoguée saine, malus langue atténué (+0,5). ");
   }
 
-  const score20_capped = final;
+  const diag20_capped = diag20;
 
-  // Verdict
+  // Note canonique /60 => /20 dérivé exact
+  const score60_raw = Number(rubric?.score60 ?? 0);
+  const canon = applyHardCaps60(score60_raw, gates, level, refMode);
+  const score60 = canon.score60;
+  rubric.score60_raw = score60_raw;
+  rubric.score60 = score60;
+  rubric.capsApplied60 = canon.capsApplied60;
+  const score20 = score20From60(score60);
+  const final = score20;
+
+  let diagVerdict = "";
+  if(diag20_capped >= 17) diagVerdict = "Très solide : récit net, maîtrisé, incarné.";
+  else if(diag20_capped >= 14) diagVerdict = "Bon : des qualités réelles, mais des fragilités empêchent d’aller plus haut.";
+  else if(diag20_capped >= 10) diagVerdict = "Fragile : lecture possible, mais outils narratifs et forme à renforcer.";
+  else diagVerdict = "Insuffisant : base formelle et/ou narrative instable à ce niveau.";
+
+  // Verdict officiel basé sur /60
   let verdict = "";
-  if(final >= 17) verdict = "Très solide : récit net, maîtrisé, incarné.";
-  else if(final >= 14) verdict = "Bon : des qualités réelles, mais des fragilités empêchent d’aller plus haut.";
-  else if(final >= 10) verdict = "Fragile : lecture possible, mais outils narratifs et forme à renforcer.";
+  if(score60 >= 51) verdict = "Très solide : récit net, maîtrisé, incarné.";
+  else if(score60 >= 42) verdict = "Bon : des qualités réelles, mais des fragilités empêchent d’aller plus haut.";
+  else if(score60 >= 30) verdict = "Fragile : lecture possible, mais outils narratifs et forme à renforcer.";
   else verdict = "Insuffisant : base formelle et/ou narrative instable à ce niveau.";
+
+  audit.push(`Diagnostic legacy : ${diag20_raw.toFixed(1)}/20 brut, ${diag20_capped.toFixed(1)}/20 capé (${diagVerdict}).`);
+  audit.push(`Canonique : ${score60.toFixed(1)}/60 => ${score20.toFixed(2)}/20.`);
 
   // Forces / axes (choix sévère, priorité à ce qui bloque)
   const forces = [];
@@ -2579,7 +2618,7 @@ function buildFinal(m, p1, p2, level, raw){
   if(mode === "eleve"){
     comment =
 `${who}Niveau : ${level}
-Note : ${final}/20
+Note (rubric) : ${score60.toFixed(1)}/60 (équiv. ${score20.toFixed(2)}/20)
 
 Ce qui est bien :
 - ${f2[0]}
@@ -2600,9 +2639,9 @@ Pour la prochaine fois :
   } else {
     comment =
 `${who}Niveau : ${level}
-Note : ${final}/20
-Passe 1 (forme) : ${p1.score}/10 • Passe 2 (contenu) : ${p2.score}/10
-Pondération : ${(w1*100).toFixed(0)}% / ${(w2*100).toFixed(0)}%
+Note (rubric) : ${score60.toFixed(1)}/60 (équiv. ${score20.toFixed(2)}/20)
+Diagnostic : P1=${p1.score.toFixed(1)}/10 • P2=${p2.score.toFixed(1)}/10 • P3=+${(p3.score||0).toFixed(1)}
+Pondération diagnostic : ${(w1*100).toFixed(0)}% / ${(w2*100).toFixed(0)}%
 
 Forces :
 - ${f2[0]}
@@ -2630,7 +2669,7 @@ Objectif mesurable :
 
   const rewritePlan = buildRewritePlan(rubric);
 
-  return {final, score20_raw, score20_capped, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric, rubric50_legacy: rubric.rubric50_legacy, calib50, trace: mergedTrace, microDrills, rewritePlan};
+  return {final, score20, score60, diag20_raw, diag20_capped, diagVerdict, verdict, comment, audit, alertHtml, weights:{w1,w2}, gates, levelCfg:L, p3, rubric, rubric50_legacy: rubric.rubric50_legacy, calib50, trace: mergedTrace, microDrills, rewritePlan};
 
 }
 
@@ -3015,7 +3054,7 @@ function makePayload(state){
     thresholds: fin.levelCfg,
     pass1: { score10: p1.score, parts: p1.parts },
     pass2: { score10: p2.score, parts: p2.parts },
-    final: { score20: fin.final, score20_raw: fin.score20_raw, score20_capped: fin.score20_capped, score60: fin.rubric?.score60 ?? 0, verdict: fin.verdict, rubric50_legacy: fin.rubric50_legacy ?? roundToHalf((fin.rubric?.score60 ?? 0) * (50/60)) },
+    final: { score20: fin.score20 ?? fin.final, score60: fin.score60 ?? fin.rubric?.score60 ?? 0, diag20_raw: fin.diag20_raw, diag20_capped: fin.diag20_capped, verdict: fin.verdict, rubric50_legacy: fin.rubric50_legacy ?? roundToHalf((fin.rubric?.score60 ?? 0) * (50/60)) },
     rubric60: fin.rubric,
     metrics: {
       words: m.words,
@@ -3073,7 +3112,7 @@ function exportCSV(state){
     "timeHits","placeHits","sensesCovered","nonVisualCovered","connCount","turnsCount","actionPairs","gates"
   ];
   const row = [
-    new Date().toISOString(), student, level, fin.final, (fin.rubric?.score60 ?? 0), p1.score, p2.score,
+    new Date().toISOString(), student, level, (fin.score20 ?? fin.final), (fin.score60 ?? fin.rubric?.score60 ?? 0), p1.score, p2.score,
     fin.rubric?.modules?.langue?.score ?? 0, fin.rubric?.modules?.narration?.score ?? 0, fin.rubric?.modules?.description?.score ?? 0,
     fin.rubric?.modules?.dialogues?.score ?? 0, fin.rubric?.modules?.style?.score ?? 0, fin.rubric?.modules?.temps_lieu?.score ?? 0,
     fin.rubric?.modules?.lexique?.score ?? 0, fin.rubric?.modules?.cohesion?.score ?? 0, fin.rubric?.modules?.coherence?.score ?? 0,
@@ -3133,8 +3172,8 @@ async function evaluateBatch(){
         level,
         student: parsed.student,
         words: m.words,
-        score20: fin.final,
-        score60: fin.rubric?.score60 ?? 0,
+        score20: fin.score20 ?? fin.final,
+        score60: fin.score60 ?? fin.rubric?.score60 ?? 0,
         modules: fin.rubric?.modules || {},
         gates: Object.entries(fin.gates||{}).filter(([,v])=>v).map(([k])=>k),
         priorities: (fin.rewritePlan||[]).slice(0,3).map(x=>x.title)
@@ -3169,7 +3208,19 @@ function loadHistory(){
     const raw = localStorage.getItem(HIST_KEY);
     if(!raw) return [];
     const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
+    const arr = Array.isArray(data) ? data : [];
+    return arr.map(x=>{
+      const y = {...x};
+      if(typeof y.final60 !== "number" && typeof y.final20 === "number"){
+        y.final60 = Number((y.final20 * 3).toFixed(2));
+        y.legacy = true;
+      }
+      if(typeof y.final20 !== "number" && typeof y.final60 === "number"){
+        y.final20 = score20From60(y.final60);
+        y.legacy = true;
+      }
+      return y;
+    });
   } catch { return []; }
 }
 function saveHistory(arr){
@@ -3188,7 +3239,7 @@ function renderHistory(){
   const lines = arr.slice(-12).reverse().map(x=>{
     const d = new Date(x.timestamp);
     const ds = isNaN(d.getTime()) ? x.timestamp : d.toLocaleString();
-    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${x.final20}/20 (${x.final60 ?? "—"}/60, legacy ${x.final50Legacy ?? "—"}/50) — mots:${x.words} — gates:${x.gates||"—"}`;
+    return `• ${ds} — ${x.student||"—"} — ${x.level} — ${Number(x.final20 ?? 0).toFixed(2)}/20 (${x.final60 ?? "—"}/60${x.legacy?", legacy import":""}, legacy ${x.final50Legacy ?? "—"}/50) — mots:${x.words} — gates:${x.gates||"—"}`;
   }).join("\n");
   box.textContent = lines;
 }
@@ -3213,16 +3264,18 @@ function renderAll(level, m, p1, p2, fin){
 const p3s = fin.p3?.score ?? 0;
 document.getElementById("passScores").textContent =
   `${p1.score.toFixed(1)}/10  •  ${p2.score.toFixed(1)}/10  •  +${p3s.toFixed(1)} exc`;
-  document.getElementById("finalScore").textContent = `${fin.final.toFixed(1)}/20`;
+  document.getElementById("finalScore").textContent = `${(fin.score20 ?? fin.final).toFixed(2)}/20`;
   document.getElementById("finalVerdict").textContent = fin.verdict;
-  const raw60 = (fin.rubric?.score60 ?? 0);
+  const raw60 = (fin.score60 ?? fin.rubric?.score60 ?? 0);
   document.getElementById("finalScore60").textContent = `${raw60.toFixed(1)}/60`;
   const capLabel = (fin.rubric?.capsApplied || []).map(c=>`≤${c.cap60}`).join(", ") || "aucun plafond";
   document.getElementById("final60Hint").textContent = `${(fin.rubric?.capsApplied||[]).length?"plafonds actifs":"sans plafond"} (${capLabel}) • version ${fin.rubric?.version || "rubric-v2"}.`;
-  const pct60 = clamp01((fin.rubric?.score60 ?? 0)/60)*100;
+  const final20Hint = document.getElementById("final20Hint");
+  if(final20Hint) final20Hint.textContent = `Le /20 est l’équivalent exact du /60 (score60/3). ${raw60.toFixed(1)}/60 => ${(fin.score20 ?? fin.final).toFixed(2)}/20.`;
+  const pct60 = clamp01(raw60/60)*100;
   const b60 = document.getElementById("finalBar60"); if(b60) b60.style.width = pct60.toFixed(1)+"%";
 
-  const pct = clamp01(fin.final/20) * 100;
+  const pct = clamp01((fin.score60 ?? 0)/60) * 100;
   document.getElementById("finalBar").style.width = pct.toFixed(1) + "%";
 
   const tbody = document.querySelector("#rubricTable tbody");
@@ -3609,8 +3662,8 @@ bindEvt("btnSave","click", ()=>{
     timestamp: new Date().toISOString(),
     student,
     level: last.level,
-    final20: last.fin.final,
-    final60: last.fin.rubric?.score60 ?? 0,
+    final20: last.fin.score20 ?? last.fin.final,
+    final60: last.fin.score60 ?? last.fin.rubric?.score60 ?? 0,
     final50Legacy: last.fin.rubric50_legacy ?? roundToHalf((last.fin.rubric?.score60 ?? 0) * (50/60)),
     pass1_10: last.p1.score,
     pass2_10: last.p2.score,
