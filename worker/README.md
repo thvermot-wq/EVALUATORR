@@ -42,11 +42,11 @@ curl -X POST "https://<votre-worker>/correct" \
     "text":"Texte élève...",
     "local":{
       "score50":28,
-      "modules9":{},
+      "modules":{},
       "gates":{},
-      "keyMetrics":{"words":210}
+      "traceLight":[]
     },
-    "wanted":{"jsonSchemaVersion":"1"}
+    "schema":"evaluatorr-v1"
   }'
 ```
 
