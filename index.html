@@ -1272,12 +1272,19 @@ function computeGates(m, level){
   // Hard gate : aucune fin de phrase (on accepte … comme fin si endPunctAny est calculé)
   const noEnd = ((m.endPunctAny ?? m.endPunct) === 0);
 
+  const timeMissing = (m.timeHits < 1);
+  const placeMissing = (m.placeHits < 1);
+  const ancrageMissing = (level === "3e") ? (timeMissing || placeMissing) : (timeMissing && placeMissing);
+
   const gates = {
     noEndPunct: noEnd,
     tooShort: (m.words < L.minWords),
     paragraphGate: (m.words >= L.minParagraphsIfOver.words && m.paras.length < L.minParagraphsIfOver.paras),
     sensesGate: (m.sensesCovered < L.minSensesCovered || m.nonVisualCovered < L.minNonVisualSenses),
-    timePlaceGate: (m.timeHits < 1 || m.placeHits < 1),
+    timeMissing,
+    placeMissing,
+    ancrageMissing,
+    timePlaceGate: ancrageMissing,
 
     // Segmentation jugée sur segUnits (meilleur pour le style littéraire)
     punctuationScarce: (seg < L.minEndPunct),
@@ -1577,11 +1584,11 @@ function scorePass2(m, level){
   const hasClosure = /(\bfinalement\b|\bà la fin\b|\benfin\b|\bdésormais\b|\bdepuis ce jour\b)/.test(m.lower);
   if(hasClosure) coh += 0.3; else coh += 0.1;
 
-  // repères temps/lieu
-  if(gates.timePlaceGate){
+  // repères temps/lieu (soft)
+  if(gates.ancrageMissing){
     coh -= 0.5;
-    audit.push("COH (-) : repères temps/lieu insuffisants.");
-    alerts.push({lvl:"bad", t:"Récit : il manque un repère de temps et/ou de lieu (minimum)."});
+    audit.push("COH (-) : ancrage temps/lieu insuffisant.");
+    alerts.push({lvl:"warn", t: level==="3e" ? "Récit : en 3e, temps et lieu doivent être explicites." : "Récit : ajoute au moins un ancrage (temps ou lieu)."});
   }
 
   // mur de texte pénalise cohérence (lecture)
@@ -1661,11 +1668,12 @@ function scorePass2(m, level){
     pass2 = Math.min(pass2, 5.5);
     audit.push(`PASS2 cap : texte trop court (<${L.minWords}) ⇒ Passe 2 ≤ 5,5/10.`);
   }
-  if(gates.timePlaceGate){
+  const refMode = getRefMode();
+  if(refMode === "severe" && gates.ancrageMissing){
     pass2 = Math.min(pass2, 6.0);
-    audit.push("PASS2 cap : manque de repères temps/lieu ⇒ Passe 2 ≤ 6/10.");
+    audit.push("PASS2 cap : ancrage temps/lieu insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
-  if(gates.sensesGate){
+  if(refMode === "severe" && gates.sensesGate){
     pass2 = Math.min(pass2, 6.0);
     audit.push("PASS2 cap : sensoriel insuffisant ⇒ Passe 2 ≤ 6/10.");
   }
@@ -1676,7 +1684,7 @@ function scorePass2(m, level){
   trace.push(traceItem("pass2","ld", ld, "Lumière/ombre."));
   trace.push(traceItem("pass2","sens", sens, "5 sens et non-visuels."));
   trace.push(traceItem("pass2","interest", interest, "Intérêt narratif."));
-  if(gates.timePlaceGate) trace.push(traceItem("pass2","gate_time_place", -0.5, "Repères temps/lieu insuffisants.", firstEvidence(m.text)));
+  if(gates.ancrageMissing) trace.push(traceItem("pass2","gate_time_place", -0.5, "Ancrage temps/lieu insuffisant.", firstEvidence(m.text)));
   if(gates.sensesGate) trace.push(traceItem("pass2","gate_senses", -0.5, "Sensoriel insuffisant.", firstEvidence(m.text)));
   if(gates.tooShort) trace.push(traceItem("pass2","gate_too_short", -0.5, "Texte trop court.", firstEvidence(m.text)));
   return {score: roundToHalf(clamp(pass2, 0, 10)), audit: traceToAudit(trace), alerts, parts:{theme, coh, pov, ld, sens, interest}, gates, trace};
@@ -2058,7 +2066,8 @@ function buildFinal(m, p1, p2, level, raw){
   let final = roundToHalf((p1.score * w1 * 2) + (p2.score * w2 * 2) + p3.score);
   const score20_raw = final;
 
-  // Hard gates (plafonds)
+  // Plafonds finaux
+  const refMode = getRefMode();
   if(gates.noEndPunct){
     final = Math.min(final, 9.5);
     audit.push("Plafond : aucune ponctuation de fin de phrase (. ! ?) ⇒ note ≤ 9,5/20.");
@@ -2072,13 +2081,17 @@ function buildFinal(m, p1, p2, level, raw){
     final = Math.min(final, 14.0);
     audit.push("Plafond : segmentation insuffisante (paragraphes) ⇒ note ≤ 14/20.");
   }
-  if(gates.sensesGate){
+  if(gates.wallTextGate){
+    final = Math.min(final, 14.0);
+    audit.push("Plafond : mur de texte ⇒ note ≤ 14/20.");
+  }
+  if(refMode === "severe" && gates.sensesGate){
     final = Math.min(final, 14.0);
     audit.push("Plafond : sensoriel insuffisant ⇒ note ≤ 14/20.");
   }
-  if(gates.timePlaceGate){
+  if(refMode === "severe" && gates.ancrageMissing){
     final = Math.min(final, 14.0);
-    audit.push("Plafond : repères temps/lieu manquants ⇒ note ≤ 14/20.");
+    audit.push("Plafond : ancrage temps/lieu insuffisant ⇒ note ≤ 14/20.");
   }
 
   if((m.dialogue?.nbRepliques || 0) >= 3 && (m.dialogue?.dashMajRatio || 0) >= 0.75 && p1.parts.pseg < 2.0){
@@ -2115,7 +2128,7 @@ function buildFinal(m, p1, p2, level, raw){
   if(gates.noEndPunct) axes.push("Ponctuation : poser des points (. ! ?) — sinon la note reste sous 10/20.");
   if(gates.tooShort) axes.push(`Longueur : viser au moins ${L.minWords} mots pour développer (30 lignes ≠ 8 phrases).`);
   if(gates.paragraphGate) axes.push(`Segmentation : ${L.minParagraphsIfOver.paras} paragraphes minimum (début / bascule / fin).`);
-  if(gates.timePlaceGate) axes.push("Repères : installer un temps + un lieu dès le début.");
+  if(gates.ancrageMissing) axes.push(level==="3e" ? "Repères : installer explicitement un temps ET un lieu dès le début." : "Repères : installer au moins un ancrage explicite (temps ou lieu) dès le début.");
   if(gates.sensesGate) axes.push(`Sensoriel : ajouter au moins ${L.minNonVisualSenses} sens non-visuel (ouïe/odeur/toucher/goût).`);
 
   // Axes techniques
@@ -2130,7 +2143,7 @@ function buildFinal(m, p1, p2, level, raw){
   if(gates.noEndPunct) objective = "Prochain texte : au moins 6 fins de phrase (. ! ?) + majuscule après chaque point.";
   else if(gates.tooShort) objective = `Prochain texte : atteindre ≥ ${L.minWords} mots et écrire en 3 paragraphes (début / problème / fin).`;
   else if(gates.sensesGate) objective = `Prochain texte : intégrer 3 sens dont ${L.minNonVisualSenses} non-visuels (ouïe/odeur/toucher/goût).`;
-  else if(gates.timePlaceGate) objective = "Prochain texte : première phrase = repère de temps + repère de lieu (immédiats).";
+  else if(gates.ancrageMissing) objective = (level==="3e") ? "Prochain texte : première phrase = repère de temps + repère de lieu (obligatoires)." : "Prochain texte : première phrase = au moins un repère explicite (temps ou lieu).";
 
   // commentaire prof / élève
   const mode = document.getElementById("modeComment").value || "prof";
@@ -2139,6 +2152,7 @@ function buildFinal(m, p1, p2, level, raw){
 
   const f2 = [forces[0], forces[1] || forces[0]];
   const a2 = [axes[0], axes[1] || axes[0]];
+  const blockLabel = getRefMode()==="eduscol" ? "Critère à renforcer" : "Plafond activé";
 
   let comment = "";
   if(mode === "eleve"){
@@ -2151,8 +2165,8 @@ Ce qui est bien :
 - ${f2[1]}
 
 À faire maintenant :
-- ${a2[0]}
-- ${a2[1]}
+- ${blockLabel} : ${a2[0]}
+- ${blockLabel} : ${a2[1]}
 
 Pour la prochaine fois :
 - ${objective}`;
@@ -2173,9 +2187,9 @@ Forces :
 - ${f2[0]}
 - ${f2[1]}
 
-Ce qui bloque la note :
-- ${a2[0]}
-- ${a2[1]}
+${getRefMode()==="eduscol"?"Critères à renforcer :":"Plafonds activés :"}
+- ${blockLabel} : ${a2[0]}
+- ${blockLabel} : ${a2[1]}
 
 Objectif mesurable :
 - ${objective}`;
@@ -2190,8 +2204,8 @@ Objectif mesurable :
   const mergedTrace = [...(p1.trace||[]), ...(p2.trace||[]), ...(p3.trace||[]), ...(rubric50.trace||[])];
   if(gates.noEndPunct) mergedTrace.push(traceItem("final","cap_no_end_punct", 0, "Plafond final noEndPunct.", firstEvidence(m.text)));
   if(gates.tooShort) mergedTrace.push(traceItem("final","cap_too_short", 0, "Plafond final tooShort.", firstEvidence(m.text)));
-  if(gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
-  if(gates.timePlaceGate) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final timePlaceGate.", firstEvidence(m.text)));
+  if(getRefMode()==="severe" && gates.sensesGate) mergedTrace.push(traceItem("final","cap_senses", 0, "Plafond final sensesGate.", firstEvidence(m.text)));
+  if(getRefMode()==="severe" && gates.ancrageMissing) mergedTrace.push(traceItem("final","cap_time_place", 0, "Plafond final ancrageMissing.", firstEvidence(m.text)));
 
   const rewritePlan = buildRewritePlan({trace: mergedTrace, rubric50, gates, final});
 
