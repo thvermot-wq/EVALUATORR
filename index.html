@@ -265,6 +265,13 @@
             </select>
           </div>
           <div>
+            <label for="refMode">Référentiel</label><br/>
+            <select id="refMode">
+              <option value="eduscol" selected>Référentiel Éduscol (standard)</option>
+              <option value="severe">Mode sévère (diagnostic)</option>
+            </select>
+          </div>
+          <div>
             <label for="longThr">Phrase longue ≥ (mots)</label><br/>
             <input id="longThr" type="number" min="18" max="45" value="26" />
           </div>
@@ -859,7 +866,7 @@ const DIALOGUE_SORTIE_RE = /\?|\b(partir|revenir|dire|prévenir|prevenir|jure|pr
 
 
 // Seuils par niveau (v2 sévère)
-const LEVEL = {
+const LEVEL_SEVERE = {
   "5e": {
     minWords: 150,
     minParagraphsIfOver: {words: 170, paras: 2},
@@ -894,6 +901,50 @@ const LEVEL = {
     idealAvgMin: 11, idealAvgMax: 19
   }
 };
+
+const LEVEL_EDUSCOL = {
+  "5e": {
+    minWords: 130,
+    minParagraphsIfOver: {words: 160, paras: 2},
+    minSensesCovered: 1,
+    minNonVisualSenses: 0,
+    mattrOk: 0.38, mattrGood: 0.43,
+    maxTopWordShare: 0.075,
+    minEndPunct: 3,
+    targetEndsPerWords: 45,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "4e": {
+    minWords: 150,
+    minParagraphsIfOver: {words: 170, paras: 2},
+    minSensesCovered: 2,
+    minNonVisualSenses: 1,
+    mattrOk: 0.40, mattrGood: 0.45,
+    maxTopWordShare: 0.070,
+    minEndPunct: 3,
+    targetEndsPerWords: 42,
+    idealAvgMin: 11, idealAvgMax: 20
+  },
+  "3e": {
+    minWords: 170,
+    minParagraphsIfOver: {words: 190, paras: 3},
+    minSensesCovered: 2,
+    minNonVisualSenses: 1,
+    mattrOk: 0.42, mattrGood: 0.47,
+    maxTopWordShare: 0.065,
+    minEndPunct: 4,
+    targetEndsPerWords: 40,
+    idealAvgMin: 11, idealAvgMax: 19
+  }
+};
+
+function getRefMode(){
+  return document.getElementById("refMode")?.value || "eduscol";
+}
+function getLevelCfg(level){
+  const ref = getRefMode();
+  return (ref === "severe" ? LEVEL_SEVERE : LEVEL_EDUSCOL)[level] || LEVEL_EDUSCOL["4e"];
+}
 
 const GATE_CAPS_50 = {
   noEndPunct: {cap50:24, reason:"Aucune ponctuation de fin de phrase"},
@@ -966,12 +1017,13 @@ function computeMetrics(raw){
   const suspects = {};
   function isSuspect(w){
     if(w.length < 4) return false;
-    if(w.includes("'")) return false;
+    if(w.includes("'") || w.includes("-") || w.includes("’")) return false;
     if(FR_FREQ_WORDS.has(w)) return false;
     if(/([a-zà-öø-ÿ])\1\1/.test(w)) return true;
-    if(/[bcdfghjklmnpqrstvwxz]{5,}/.test(w)) return true;
+    if(/[bcdfghjklmnpqrstvwxz]{6,}/.test(w)) return true;
     if(/(ee|aa|ii|oo|uu)$/.test(w)) return true;
-    if(w.length >= 10 && !FR_FREQ_WORDS.has(w)) return true;
+    if(/\d/.test(w)) return true;
+    if(/(?=.*[a-zà-öø-ÿ])(?=.*\d)/i.test(w)) return true;
     return false;
   }
   for(const w of tokens){
@@ -1212,7 +1264,7 @@ function computeMetrics(raw){
 
 /* ========= Gates (exigences minimales) ========= */
 function computeGates(m, level){
-  const L = LEVEL[level];
+  const L = getLevelCfg(level);
 
   // Segmentation tolérante : segUnits (si dispo) sinon endPunctAny, sinon endPunct
   const seg = (m.segUnits ?? m.endPunctAny ?? m.endPunct ?? 0);
@@ -1350,9 +1402,9 @@ function scorePass1(m, level){
 
   // suspects
   if(m.suspectTotal === 0) { ortho += 1.4; audit.push("ORTHO (+) : peu d’alertes “mots suspects” (proxy)."); }
-  else if(m.suspectTotal <= 2) { ortho += 1.1; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
-  else if(m.suspectTotal <= 5) { ortho += 0.8; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
-  else { ortho += 0.4; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 3) { ortho += 1.2; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 7) { ortho += 0.9; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
+  else { ortho += 0.6; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
 
   if(m.suspectTotal > 0){
     alerts.push({lvl:"warn", t:`Mots suspects (proxy) : ${m.suspectTop.map(([w,n])=>`${w}(${n})`).join(", ")}`});
@@ -1642,7 +1694,7 @@ function scorePass3(m, level, p1, p2){
   const alerts = [];
 
   // Garde-fou : si forme trop faible, pas d’excellence (évite d’offrir des points aux copies illisibles)
-  const formOK = (p1?.score ?? 0) >= 6.5 && m.endPunct > 0 && m.words >= (LEVEL[level]?.minWords ?? 150);
+  const formOK = (p1?.score ?? 0) >= 6.5 && m.endPunct > 0 && m.words >= (getLevelCfg(level)?.minWords ?? 150);
 
   if(!formOK){
     audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
@@ -2512,9 +2564,11 @@ function makePayload(state){
   const student = (document.getElementById("student").value || "").trim();
   return {
     timestamp: new Date().toISOString(),
-    tool: "Evaluator-v2-severe",
+    tool: "Evaluator-v2",
     student,
     level,
+    refMode: getRefMode(),
+    thresholdsUsed: getRefMode(),
     weights: fin.weights,
     gates: fin.gates,
     thresholds: fin.levelCfg,
@@ -2851,6 +2905,16 @@ function bindEvt(id, evt, fn){ const el = document.getElementById(id); if(el) el
 
 const calToggle = document.getElementById("toggleCalibration");
 if(calToggle) calToggle.checked = isCalibrationEnabled();
+const refModeEl = document.getElementById("refMode");
+const savedRefMode = localStorage.getItem("evaluator_refMode");
+if(refModeEl){
+  const ref = ["eduscol","severe"].includes(savedRefMode || "") ? savedRefMode : "eduscol";
+  refModeEl.value = ref;
+  refModeEl.addEventListener("change", ()=>{
+    localStorage.setItem("evaluator_refMode", refModeEl.value || "eduscol");
+  });
+}
+
 const aiCfg = loadAICfg();
 const aiModeEl = document.getElementById("aiMode");
 const aiEndpointEl = document.getElementById("aiEndpoint");
@@ -2921,7 +2985,7 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
 
     const aiMode = aiModeEl?.value || "OFF";
     const endpoint = (aiEndpointEl?.value || "").trim();
-    const minWords = LEVEL[level]?.minWords || 150;
+    const minWords = getLevelCfg(level)?.minWords || 150;
     if(base.m.words < minWords){
       setStatus(`IA non envoyée : texte trop court (<${minWords} mots). Offline OK.`);
       renderAIBox({diagnostic:"IA non sollicitée (seuil de mots non atteint).", conseils:["Allonger la copie avant appel IA."], reecritures:[]});
