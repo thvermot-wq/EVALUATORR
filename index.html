@@ -2358,15 +2358,30 @@ async function fetchAIReport(endpoint, payload, timeoutMs=12000){
     return {ok:false, error: e?.message || "Erreur réseau"};
   } finally { clearTimeout(t); }
 }
+function normalizeAIData(obj){
+  if(!obj || typeof obj !== "object") return {};
+  if(obj.data && typeof obj.data === "object") return obj.data;
+  return obj;
+}
 function renderAIBox(obj){
   const box = document.getElementById("aiDiag");
   if(!box) return;
   if(!obj){ box.textContent = "—"; return; }
-  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
-  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
-  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
-  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
-  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  const data = normalizeAIData(obj);
+  const diag = data.diagnostic || data.diagnosticIA || data.analysis || "—";
+  const conseils = data.conseils || data.priorities || data.conseilsPrioritaires || [];
+  const rew = data.reecritures || data.rewrites || data.reecrituresCiblees || [];
+  const app = data.appreciation || data.bulletin || data.appreciationBulletin || "";
+  const fmtItem = (x)=>{
+    if(typeof x === "string") return x;
+    if(x && typeof x === "object"){
+      if(x.do_next) return `${x.title ? `${x.title} — ` : ""}${x.do_next}`;
+      if(x.after_proposal) return `${x.focus ? `${x.focus} — ` : ""}${x.after_proposal}`;
+      return JSON.stringify(x);
+    }
+    return String(x ?? "");
+  };
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${fmtItem(x)}`).join("\n") : String(v||"—");
   box.textContent = `Diagnostic IA
 ${fmt(diag)}
 
@@ -2383,12 +2398,13 @@ function gatesAreOk(gates){
   return activeGateList(gates).length === 0;
 }
 function getAISuggestedDelta(aiObj){
+  const data = normalizeAIData(aiObj);
   const cands = [
-    aiObj?.overall?.score50_delta_suggestion,
-    aiObj?.overall?.delta,
-    aiObj?.delta,
-    aiObj?.delta_suggere,
-    aiObj?.deltas?.score50
+    data?.overall?.score50_delta_suggestion,
+    data?.overall?.delta,
+    data?.delta,
+    data?.delta_suggere,
+    data?.deltas?.score50
   ];
   for(const c of cands){
     const n = Number(c);
@@ -2922,22 +2938,23 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
       renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:["Conserver le diagnostic local."], reecritures:[]});
       return;
     }
-    renderAIBox(ai.data || {});
-    const deltaInfo = applyAIScoreDelta(base, ai.data || {});
+    const aiPayload = normalizeAIData(ai.data || {});
+    renderAIBox(aiPayload);
+    const deltaInfo = applyAIScoreDelta(base, aiPayload);
     const aiBox = document.getElementById("aiDiag");
     if(aiBox){
       aiBox.textContent += `\n\nDeltas suggérés IA\n- Delta suggéré: ${deltaInfo.suggestedDelta>=0?"+":""}${deltaInfo.suggestedDelta.toFixed(1)} /50\n- Gates: ${deltaInfo.gatesOk?"OK":"BLOQUANTS"}\n- Delta appliqué: ${deltaInfo.appliedDelta>=0?"+":""}${deltaInfo.appliedDelta.toFixed(1)} /50\n- Score enrichi (indicatif): ${deltaInfo.adjustedScore50.toFixed(1)}/50\n- Note déterministe conservée: ${deltaInfo.baseScore50.toFixed(1)}/50`;
     }
-    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
+    storeAIReview(level, raw, base.m, base.fin, aiPayload);
     storeAIMemory(raw, level, base.fin, {
-      ...(ai.data || {}),
+      ...aiPayload,
       deltaApplied: deltaInfo.appliedDelta,
       score50Enriched: deltaInfo.adjustedScore50,
       score50Deterministic: deltaInfo.baseScore50
     });
     if(saveAIHistoryEl?.checked){
       if(window.__last?.fin) window.__last.fin.ai = {
-        ...(ai.data || {}),
+        ...aiPayload,
         deltaApplied: deltaInfo.appliedDelta,
         score50Enriched: deltaInfo.adjustedScore50,
         score50Deterministic: deltaInfo.baseScore50
