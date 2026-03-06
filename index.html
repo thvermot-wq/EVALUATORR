@@ -314,7 +314,7 @@
           </div>
           <div>
             <label for="aiEndpoint">aiEndpoint (URL)</label><br/>
-            <input id="aiEndpoint" type="text" placeholder="https://.../evaluate" style="width:300px" />
+            <input id="aiEndpoint" type="text" placeholder="https://.../correct" style="width:300px" />
           </div>
           <button class="btn secondary" id="btnTestAI" type="button">Tester endpoint</button>
           <label class="pill" style="gap:8px;cursor:pointer">
@@ -353,7 +353,7 @@
           </label>
         </div>
         <div class="row" style="margin-top:8px">
-          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme bon exemple</button>
+          <button class="btn secondary" id="btnMarkGoodExample" type="button">Marquer comme exemple</button>
           <label class="pill" style="gap:8px;cursor:pointer">
             <input id="exampleAnonymize" type="checkbox" checked /> Anonymiser le texte
           </label>
@@ -2150,6 +2150,7 @@ Objectif mesurable :
 
 const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
 const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
+const AI_MEMORY_KEY = "evaluator_v2_ai_memory_v1";
 const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
 
 function textHash32(str){
@@ -2164,6 +2165,33 @@ function loadAIReviews(){
   try{ const raw=localStorage.getItem(AI_REVIEW_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
 }
 function saveAIReviews(arr){ localStorage.setItem(AI_REVIEW_KEY, JSON.stringify(arr.slice(-120))); }
+function loadAIMemory(){
+  try{ const raw=localStorage.getItem(AI_MEMORY_KEY); const arr=JSON.parse(raw||"[]"); return Array.isArray(arr)?arr:[]; } catch { return []; }
+}
+function saveAIMemory(arr){ localStorage.setItem(AI_MEMORY_KEY, JSON.stringify(arr.slice(-240))); }
+function storeAIMemory(raw, level, fin, aiData){
+  const rec = {
+    ts: new Date().toISOString(),
+    hash: textHash32(raw || ""),
+    level,
+    local: {
+      score50: fin?.rubric50?.score50 ?? 0,
+      modules: fin?.rubric50?.modules || {},
+      gates: fin?.gates || {},
+      traceLight: (fin?.trace||[]).slice(0,14).map(t=>({
+        module: t.module,
+        ruleId: t.ruleId,
+        delta: t.delta,
+        message: t.message
+      }))
+    },
+    ia: aiData || null
+  };
+  const arr = loadAIMemory();
+  arr.push(rec);
+  saveAIMemory(arr);
+  return rec;
+}
 function storeAIReview(level, raw, m, fin, aiData){
   const rec = {
     ts: new Date().toISOString(),
@@ -2293,28 +2321,22 @@ function shouldUseAI(mode){
   if(mode === "AUTO") return !!navigator.onLine;
   return false;
 }
-function buildAIPayload(level, raw, m, fin){
+function buildAIPayload(level, raw, _m, fin){
   return {
-    tool: "EVALUATORR",
     level,
     text: raw,
     local: {
       score50: fin.rubric50?.score50 ?? 0,
-      modules9: fin.rubric50?.modules || {},
+      modules: fin.rubric50?.modules || {},
       gates: fin.gates || {},
-      keyMetrics: {
-        words: m.words,
-        sentences: m.sents.length,
-        paragraphs: m.paras.length,
-        timeHits: m.timeHits,
-        placeHits: m.placeHits,
-        sensesCovered: m.sensesCovered,
-        nonVisualCovered: m.nonVisualCovered,
-        turnsCount: m.turnsCount,
-        actionPairs: m.actionPairs
-      }
+      traceLight: (fin.trace||[]).slice(0,14).map(t=>({
+        module: t.module,
+        ruleId: t.ruleId,
+        delta: t.delta,
+        message: t.message
+      }))
     },
-    wanted: {jsonSchemaVersion:"1"}
+    schema: "evaluatorr-v1"
   };
 }
 async function fetchAIReport(endpoint, payload, timeoutMs=12000){
@@ -2336,15 +2358,30 @@ async function fetchAIReport(endpoint, payload, timeoutMs=12000){
     return {ok:false, error: e?.message || "Erreur réseau"};
   } finally { clearTimeout(t); }
 }
+function normalizeAIData(obj){
+  if(!obj || typeof obj !== "object") return {};
+  if(obj.data && typeof obj.data === "object") return obj.data;
+  return obj;
+}
 function renderAIBox(obj){
   const box = document.getElementById("aiDiag");
   if(!box) return;
   if(!obj){ box.textContent = "—"; return; }
-  const diag = obj.diagnostic || obj.diagnosticIA || obj.analysis || "—";
-  const conseils = obj.conseils || obj.priorities || obj.conseilsPrioritaires || [];
-  const rew = obj.reecritures || obj.rewrites || obj.reecrituresCiblees || [];
-  const app = obj.appreciation || obj.bulletin || obj.appreciationBulletin || "";
-  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${x}`).join("\n") : String(v||"—");
+  const data = normalizeAIData(obj);
+  const diag = data.diagnostic || data.diagnosticIA || data.analysis || "—";
+  const conseils = data.conseils || data.priorities || data.conseilsPrioritaires || [];
+  const rew = data.reecritures || data.rewrites || data.reecrituresCiblees || [];
+  const app = data.appreciation || data.bulletin || data.appreciationBulletin || "";
+  const fmtItem = (x)=>{
+    if(typeof x === "string") return x;
+    if(x && typeof x === "object"){
+      if(x.do_next) return `${x.title ? `${x.title} — ` : ""}${x.do_next}`;
+      if(x.after_proposal) return `${x.focus ? `${x.focus} — ` : ""}${x.after_proposal}`;
+      return JSON.stringify(x);
+    }
+    return String(x ?? "");
+  };
+  const fmt = (v)=>Array.isArray(v) ? v.map((x)=>`- ${fmtItem(x)}`).join("\n") : String(v||"—");
   box.textContent = `Diagnostic IA
 ${fmt(diag)}
 
@@ -2356,6 +2393,32 @@ ${fmt((Array.isArray(rew)?rew:[]).slice(0,2))}
 
 Appréciation bulletin (optionnel)
 ${app || "—"}`;
+}
+function gatesAreOk(gates){
+  return activeGateList(gates).length === 0;
+}
+function getAISuggestedDelta(aiObj){
+  const data = normalizeAIData(aiObj);
+  const cands = [
+    data?.overall?.score50_delta_suggestion,
+    data?.overall?.delta,
+    data?.delta,
+    data?.delta_suggere,
+    data?.deltas?.score50
+  ];
+  for(const c of cands){
+    const n = Number(c);
+    if(Number.isFinite(n)) return clamp(n, -2, 2);
+  }
+  return 0;
+}
+function applyAIScoreDelta(baseState, aiObj){
+  const baseScore50 = Number(baseState?.fin?.rubric50?.score50 ?? 0);
+  const gatesOk = gatesAreOk(baseState?.fin?.gates || {});
+  const delta = getAISuggestedDelta(aiObj);
+  const applied = gatesOk ? delta : 0;
+  const adjusted = clamp(baseScore50 + applied, 0, 50);
+  return {baseScore50, gatesOk, suggestedDelta: delta, appliedDelta: applied, adjustedScore50: adjusted};
 }
 const CALIB_KEY = "evaluator_v2_calibration_v1";
 const CALIB_TOGGLE_KEY = "evaluator_v2_calibration_toggle_v1";
@@ -2843,7 +2906,7 @@ document.getElementById("btnTestAI")?.addEventListener("click", async ()=>{
   const endpoint = (aiEndpointEl?.value || "").trim();
   if(!endpoint){ setStatus("Saisis un endpoint IA."); return; }
   setStatus("Test endpoint IA…");
-  const ping = await fetchAIReport(endpoint, {tool:"EVALUATORR", wanted:{jsonSchemaVersion:"1"}}, 12000);
+  const ping = await fetchAIReport(endpoint, {level:"4e", text:"Ping technique", local:{score50:0, modules:{}, gates:{}, traceLight:[]}, schema:"evaluatorr-v1"}, 12000);
   setStatus(ping.ok ? "Endpoint IA OK." : "Endpoint IA indisponible.");
 });
 
@@ -2875,10 +2938,27 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
       renderAIBox({diagnostic:"IA indisponible, offline OK", conseils:["Conserver le diagnostic local."], reecritures:[]});
       return;
     }
-    renderAIBox(ai.data || {});
-    storeAIReview(level, raw, base.m, base.fin, ai.data || {});
+    const aiPayload = normalizeAIData(ai.data || {});
+    renderAIBox(aiPayload);
+    const deltaInfo = applyAIScoreDelta(base, aiPayload);
+    const aiBox = document.getElementById("aiDiag");
+    if(aiBox){
+      aiBox.textContent += `\n\nDeltas suggérés IA\n- Delta suggéré: ${deltaInfo.suggestedDelta>=0?"+":""}${deltaInfo.suggestedDelta.toFixed(1)} /50\n- Gates: ${deltaInfo.gatesOk?"OK":"BLOQUANTS"}\n- Delta appliqué: ${deltaInfo.appliedDelta>=0?"+":""}${deltaInfo.appliedDelta.toFixed(1)} /50\n- Score enrichi (indicatif): ${deltaInfo.adjustedScore50.toFixed(1)}/50\n- Note déterministe conservée: ${deltaInfo.baseScore50.toFixed(1)}/50`;
+    }
+    storeAIReview(level, raw, base.m, base.fin, aiPayload);
+    storeAIMemory(raw, level, base.fin, {
+      ...aiPayload,
+      deltaApplied: deltaInfo.appliedDelta,
+      score50Enriched: deltaInfo.adjustedScore50,
+      score50Deterministic: deltaInfo.baseScore50
+    });
     if(saveAIHistoryEl?.checked){
-      if(window.__last?.fin) window.__last.fin.ai = ai.data;
+      if(window.__last?.fin) window.__last.fin.ai = {
+        ...aiPayload,
+        deltaApplied: deltaInfo.appliedDelta,
+        score50Enriched: deltaInfo.adjustedScore50,
+        score50Deterministic: deltaInfo.baseScore50
+      };
     }
     setStatus("Évaluation + IA terminée.");
   } catch(e){
