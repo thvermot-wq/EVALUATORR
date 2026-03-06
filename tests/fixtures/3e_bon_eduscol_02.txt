@@ -1,0 +1,5 @@
+Vendredi soir, dans l'atelier de technologie, notre groupe devait finaliser un prototype avant la présentation. Le temps était compté, et chaque erreur ralentissait l'ensemble. Nous avons commencé par relire le cahier des charges, puis j'ai proposé une répartition claire des tâches. Pendant qu'un camarade soudait, je testais les capteurs et je consignais les résultats.
+
+Le bourdonnement des machines couvrait parfois nos échanges, mais nous avons gardé un rythme régulier. Quand un module a cessé de répondre, nous avons isolé la panne au lieu de paniquer. J'ai vérifié l'alimentation, puis la connexion série, et enfin la boucle de contrôle. Cette méthode progressive nous a évité de perdre du temps. Peu à peu, le système est redevenu stable.
+
+Au moment de la démonstration, la maquette a fonctionné sans blocage. Nous avons expliqué nos choix, justifié nos tests, et montré les limites restantes. Cette réussite ne venait pas d'une idée brillante, mais d'une méthode commune, rigoureuse et assumée. En quittant l'atelier, j'avais la certitude qu'un projet collectif avance mieux quand chacun argumente, écoute et ajuste.
