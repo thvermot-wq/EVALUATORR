@@ -600,6 +600,24 @@ function firstEvidence(text){
   const t = String(text||"");
   return [mkEvidence(t, 0, Math.min(t.length, 80))];
 }
+function pickEvidence(raw, token, max=2){
+  const text = String(raw||"");
+  const t = String(token||"").trim();
+  if(!text || !t) return [];
+  const out = [];
+  let from = 0;
+  const low = text.toLowerCase();
+  const needle = t.toLowerCase();
+  while(out.length < max){
+    const idx = low.indexOf(needle, from);
+    if(idx < 0) break;
+    const start = clamp(idx, 0, text.length);
+    const end = clamp(idx + needle.length, 0, text.length);
+    out.push(mkEvidence(text, start, end, 55));
+    from = idx + needle.length;
+  }
+  return out;
+}
 function traceItem(module, ruleId, delta, message, evidence=[]){
   return {module, ruleId, delta:Number(delta.toFixed(2)), message, evidence};
 }
@@ -755,6 +773,11 @@ const STOP = new Set([
   "est","suis","es","sommes","êtes","sont","étais","était","étaient","été","être","a","as","avons","avez","ont",
   "avait","avais","avaient","eu","avoir","fait","fais","faisait","faire","très","mal","bien"
 ]);
+
+const STOP_FR = new Set(["le","la","les","un","une","des","du","de","d","et","ou","mais","car","donc","or","ni","à","au","aux","en","dans","sur","sous","chez","avec","sans","pour","par","vers","entre","ce","cet","cette","ces","je","j","tu","il","elle","on","nous","vous","ils","elles","me","te","se","qui","que","quoi","dont","où","quand","comme","si","ne","pas","plus","jamais","rien","personne"]);
+const CONNECTEURS = ["mais","pourtant","cependant","donc","alors","ainsi","parce que","puis","ensuite","tandis que","pendant que","quand","comme","si","car","du coup","en revanche","par conséquent"];
+const WEAK_VERBS_FORMS = ["être","suis","es","est","sommes","êtes","sont","été","avais","avait","avaient","avoir","ai","as","a","ont","eu","faire","fais","fait","font","faisait","faisaient","aller","vais","va","vont","allait","allaient","dire","dis","dit","disent","disait","disaient"];
+const INTENSIFIERS = ["très","vraiment","super","trop"];
 
 // Proxy “dico fréquent” (orthographe)
 const FR_FREQ_WORDS = new Set((
@@ -1034,6 +1057,69 @@ function computeMetrics(raw){
 
   const repeatsNear = nearRepeats(tokens, 10, 4, STOP);
 
+  // Lexique v2
+  const lexTokens = tokens.filter(Boolean);
+  const lexContent = lexTokens.filter(w => !STOP_FR.has(w));
+  const lexTypesMap = {};
+  for(const w of lexContent){ lexTypesMap[w] = (lexTypesMap[w] || 0) + 1; }
+  const lexTypes = Object.keys(lexTypesMap);
+  const lexHapax = lexTypes.filter(k => lexTypesMap[k] === 1).length;
+  const lexHapaxRatio = lexTypes.length ? (lexHapax / lexTypes.length) : 0;
+  const longWordCount = lexTokens.filter(w => w.length >= 9 && !STOP_FR.has(w)).length;
+  const longWordRatio = lexTokens.length ? (longWordCount / lexTokens.length) : 0;
+
+  let connectorsCount = 0;
+  const connectorsFound = new Set();
+  const connectorEvidence = [];
+  for(const c of CONNECTEURS){
+    const esc = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`\b${esc}\b`, "gi");
+    const matches = [...lower.matchAll(re)];
+    if(matches.length){
+      connectorsCount += matches.length;
+      connectorsFound.add(c);
+      for(const mt of matches.slice(0,2)){
+        connectorEvidence.push(mkEvidence(text, mt.index || 0, (mt.index || 0) + c.length, 55));
+      }
+    }
+  }
+  const connectorsUnique = connectorsFound.size;
+  const connectorsDensity = lexTokens.length ? (connectorsCount / lexTokens.length) * 100 : 0;
+
+  const weakVerbSet = new Set(WEAK_VERBS_FORMS);
+  const weakVerbCount = lexTokens.filter(w => weakVerbSet.has(w)).length;
+  const weakVerbRate = lexTokens.length ? (weakVerbCount / lexTokens.length) : 0;
+
+  const intensifierSet = new Set(INTENSIFIERS);
+  const intensifierCount = lexTokens.filter(w => intensifierSet.has(w)).length;
+  const intensifierRate = lexTokens.length ? (intensifierCount / lexTokens.length) : 0;
+
+  const contentFreq = {};
+  for(const w of lexTokens){
+    if(STOP_FR.has(w) || w.length < 4) continue;
+    contentFreq[w] = (contentFreq[w] || 0) + 1;
+  }
+  const contentTop8 = topN(contentFreq, 8);
+  const contentTop8Count = contentTop8.reduce((a,[,n])=>a+n,0);
+  const contentRepeatScore = lexTokens.length ? (contentTop8Count / lexTokens.length) : 0;
+
+  const lex = {
+    tokensCount: lexTokens.length,
+    typesCount: lexTypes.length,
+    hapaxRatio: lexHapaxRatio,
+    longWordRatio,
+    connectorsCount,
+    connectorsUnique,
+    connectorsDensity,
+    connectorEvidence: connectorEvidence.slice(0,2),
+    weakVerbRate,
+    weakVerbCount,
+    intensifierRate,
+    intensifierCount,
+    contentTop8,
+    contentRepeatScore
+  };
+
   // Orthographe proxy “suspects”
   const suspects = {};
   function isSuspect(w){
@@ -1250,7 +1336,7 @@ function computeMetrics(raw){
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
     sentLens, avgSent, sdSent,
     longThr, longVeryThr, longSentences, veryLongSentences,
-    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear,
+    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear, lex,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
     offsetMap: {kind:"normalized_identity", length:text.length},
     agreementLikelyDet, agreementLikelySubj, tenseMixWarn,
@@ -1847,13 +1933,47 @@ function parseDialogueInfo(raw, m){
 }
 
 
+function scoreLexiqueV2(level, m){
+  const tuning = RUBRIC_CFG.levelTuning?.[level] || {};
+  const max = 7;
+  let score = 4.0;
+  const signals = [];
+  const evidence = [];
+
+  const hapaxTarget = level === "5e" ? 0.30 : 0.35;
+  const connDensityTarget = level === "5e" ? 1.0 : 1.5;
+  const weakVerbMax = level === "5e" ? 0.08 : 0.06;
+  const repeatLimit = Number(tuning.maxTopWordShare ?? 0.20) + 0.08;
+
+  if((m.mattr || 0) >= Number(tuning.minMattrOk ?? 0.63)){ score += 0.5; signals.push(`MATTR OK (${m.mattr.toFixed(2)})`); }
+  if((m.lex?.hapaxRatio || 0) >= hapaxTarget){ score += 0.5; signals.push(`Hapax robuste (${(m.lex.hapaxRatio*100).toFixed(0)}%)`); }
+  if((m.lex?.connectorsUnique || 0) >= Number(tuning.minConnectors ?? 1)){ score += 0.5; signals.push(`Connecteurs variés (${m.lex.connectorsUnique})`); }
+  if((m.lex?.connectorsDensity || 0) >= connDensityTarget){ score += 0.5; signals.push(`Connecteurs denses (${m.lex.connectorsDensity.toFixed(1)}/100)`); }
+
+  if((m.lex?.weakVerbRate || 0) > weakVerbMax){ score -= 0.7; signals.push(`Verbes faibles élevés (${(m.lex.weakVerbRate*100).toFixed(1)}%)`); }
+  if((m.lex?.intensifierRate || 0) > 0.03){ score -= 0.5; signals.push(`Intensifieurs fréquents (${(m.lex.intensifierRate*100).toFixed(1)}%)`); }
+  if((m.lex?.contentRepeatScore || 0) > repeatLimit){ score -= 0.8; signals.push(`Répétitions lexicales (${(m.lex.contentRepeatScore*100).toFixed(1)}%)`); }
+
+  const rep = (m.lex?.contentTop8 || []).filter(([,n])=>n>=2).slice(0,2);
+  for(const [w] of rep){ evidence.push(...pickEvidence(m.text, w, 1)); }
+  const weakCandidates = Object.entries((m.freq||{})).filter(([w,n])=>new Set(WEAK_VERBS_FORMS).has(w) && n>=1).slice(0,2);
+  for(const [w] of weakCandidates){ evidence.push(...pickEvidence(m.text, w, 1)); }
+  for(const ev of (m.lex?.connectorEvidence || []).slice(0,2)){ evidence.push(ev); }
+
+  if((m.lex?.longWordRatio || 0) >= 0.08){ score += 0.2; signals.push(`Lexique précis (mots longs ${(m.lex.longWordRatio*100).toFixed(1)}%)`); }
+
+  return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,4), evidence: evidence.slice(0,4)};
+}
+
 function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const {gates} = computeGates(m, level);
   const trace = fin?.trace || [...(p1?.trace||[]), ...(p2?.trace||[]), ...(p3?.trace||[])];
 
   const weights = cfg.weights60 || RUBRIC_CFG.weights60;
 
-  const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[]}]));
+  const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[],signals:[],evidence:[]}]));
+
+  const tuning = cfg.levelTuning?.[level] || {};
 
   const tuning = cfg.levelTuning?.[level] || {};
 
@@ -1956,10 +2076,12 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   else modules.coherence.score -= 0.4;
   if((m.turnsCount || 0) >= minCausal) modules.narration.score += 0.4;
 
-  if((m.mattr || 0) >= Number(tuning.minMattrOk ?? 0.63)) modules.lexique.score += 0.7;
-  else modules.lexique.score -= 0.5;
-  if((m.top1Share || 0) <= Number(tuning.maxTopWordShare ?? 0.2)) modules.lexique.score += 0.4;
-  else modules.lexique.score -= 0.5;
+  const lexV2 = scoreLexiqueV2(level, m);
+  modules.lexique.score = lexV2.score;
+  modules.lexique.max = lexV2.max;
+  modules.lexique.signals = lexV2.signals || [];
+  modules.lexique.evidence = lexV2.evidence || [];
+  modules.lexique.traceIds.push("lexique_v2");
 
   for(const v of Object.values(modules)){
     v.score = roundToHalf(clamp(v.score, 0, v.max));
@@ -1987,7 +2109,8 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
       timeHits: m.timeHits,
       placeHits: m.placeHits,
       sensesCovered: m.sensesCovered,
-      nonVisualCovered: m.nonVisualCovered
+      nonVisualCovered: m.nonVisualCovered,
+      lex: m.lex
     },
     tuning
   };
@@ -2000,6 +2123,8 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
 
 
 function diagnoseRubricModule(moduleName, moduleState, trace){
+  const sig = (moduleState?.signals || []).slice(0,2);
+  if(sig.length) return sig.join(" • ");
   const ids = moduleState?.traceIds || [];
   const picked = ids.map(id => (trace||[]).find(t=>t.ruleId===id)).find(Boolean);
   if(picked?.message) return picked.message;
@@ -2670,6 +2795,7 @@ function makePayload(state){
       sensesHits: m.sensesHits,
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
+      lex: m.lex,
       vagueCount: m.vagueCount,
       ticsCount: m.ticsCount,
       longSentences: m.longSentences.length,
