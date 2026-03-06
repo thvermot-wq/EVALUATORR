@@ -2395,6 +2395,84 @@ function scoreCoherenceV3(level, m){
 }
 
 
+
+function scoreDialoguesV2Fixed(m, max=6){
+  const base = roundToHalf(max * 0.60);
+  const info = parseDialogueInfo(m.text, m);
+  const trace = [];
+  let delta = 0;
+  if(info.count >= 2){ delta += 1.5; trace.push(traceItem("rubric50","dialogue_count", +1.5, `Dialogues présents (${info.count} répliques).`, (info.evidence?.replByDash||[]).concat(info.evidence?.replByFr||[]).concat(info.evidence?.replByStd||[]).slice(0,2))); }
+  else if((m.dialogue?.nbIncises || 0) >= 1){ delta -= 0.8; trace.push(traceItem("rubric50","dialogue_missing_markers", -0.8, "Dialogue probable sans marquage clair (tirets/guillemets).", firstEvidence(m.text))); }
+  if(info.punctRatio >= 0.66){ delta += 1.0; trace.push(traceItem("rubric50","dialogue_punct", +1.0, "Ponctuation dialoguée globalement saine.")); }
+  else if(info.count >= 2){ delta -= 0.8; trace.push(traceItem("rubric50","dialogue_punct", -0.8, "Ponctuation/dialogues fragiles (tirets/majuscules/incises/guillemets).", info.evidence?.quoteIssue||firstEvidence(m.text))); }
+  if(info.friction){ delta += 0.8; trace.push(traceItem("rubric50","dialogue_friction", +0.8, "Friction détectée tôt dans l'échange.", info.evidence?.friction||[])); }
+  if(info.bascule){ delta += 0.8; trace.push(traceItem("rubric50","dialogue_bascule", +0.8, "Bascule dialoguée détectée.", info.evidence?.bascule||[])); }
+  if(info.sortie){ delta += 0.9; trace.push(traceItem("rubric50","dialogue_sortie", +0.9, "Sortie de dialogue avec décision/tension.", info.evidence?.sortie||[])); }
+  if(!info.quoteBalanced){ delta -= 0.9; trace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.9, "Guillemets non équilibrés.", info.evidence?.quoteIssue||firstEvidence(m.text))); }
+
+  const score = roundToHalf(clamp(base + delta, 0, max));
+  const breakdown = {
+    structure:{score: clamp(base + (info.count>=2?0.8:-0.4),0,2), max:2, signals:[info.count>=2?"Répliques présentes":"Structure dialoguée fragile"], evidence:[]},
+    ponctuation:{score: clamp((info.punctRatio>=0.66?1.4:0.6) + (!info.quoteBalanced?-0.4:0),0,2), max:2, signals:[info.punctRatio>=0.66?"Ponctuation tenue":"Ponctuation à renforcer"], evidence:[]},
+    dynamique:{score: clamp((info.friction?0.7:0.2) + (info.bascule?0.6:0) + (info.sortie?0.7:0.1),0,2), max:2, signals:[info.friction||info.bascule||info.sortie?"Dialogue dynamique":"Dialogue peu orienté action"], evidence:[]}
+  };
+  const signals = [
+    info.count>=2?`Dialogues présents (${info.count})`:"Dialogue discret",
+    info.punctRatio>=0.66?"Ponctuation dialogue saine":"Ponctuation dialogue fragile",
+    info.friction||info.bascule||info.sortie?"Tension dialoguée visible":"Peu de bascule dialoguée"
+  ].slice(0,3);
+  const evidence = trace.flatMap(t=>t.evidence||[]).filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+  return {score,max,breakdown,signals,evidence,trace};
+}
+
+function scoreDescriptionV2Fixed(m, max=7){
+  const base = roundToHalf(max * 0.60);
+  const trace = [];
+  let delta = 0;
+  if(m.desc?.trioCovered){ delta += 2.2; trace.push(traceItem("rubric50","desc_trio", +2.2, "Description ancrée : structure + objet + dérangement présents.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,3))); }
+  else { delta -= 1.0; trace.push(traceItem("rubric50","desc_trio_missing", -1.0, "Description incomplète : trio structure/objet/dérangement non couvert.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,2))); }
+  if((m.desc?.nonVisualCoreCovered || 0) >= 2){ delta += 1.8; trace.push(traceItem("rubric50","desc_non_visual", +1.8, "Sens non-visuels bien mobilisés (olfactif/tactile/sonore).", m.desc?.evidence?.nonVisual || [])); }
+  else { delta -= 0.8; trace.push(traceItem("rubric50","desc_non_visual_low", -0.8, "Sens non-visuels insuffisants pour ancrer la scène.", m.desc?.evidence?.nonVisual || firstEvidence(m.text))); }
+  if((m.desc?.verbNounRatio || 0) < 0.55){ delta -= 0.9; trace.push(traceItem("rubric50","desc_inventory", -0.9, "Description trop en inventaire (noms >> verbes d'action).", [...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.structure||[])].slice(0,2))); }
+  else { delta += 0.6; }
+
+  const score = roundToHalf(clamp(base + delta, 0, max));
+  const breakdown = {
+    trio:{score: m.desc?.trioCovered?2.5:0.8, max:3, signals:[m.desc?.trioCovered?"Trio descriptif couvert":"Trio descriptif incomplet"], evidence:[...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,2)},
+    sensoriel:{score: (m.desc?.nonVisualCoreCovered||0)>=2?2.0:0.8, max:2, signals:[(m.desc?.nonVisualCoreCovered||0)>=2?"Ancrage sensoriel riche":"Ancrage sensoriel faible"], evidence:(m.desc?.evidence?.nonVisual||[]).slice(0,1)},
+    dynamique:{score: (m.desc?.verbNounRatio||0)>=0.55?1.6:0.8, max:2, signals:[(m.desc?.verbNounRatio||0)>=0.55?"Description active":"Description inventaire"], evidence:[...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.structure||[])].slice(0,1)}
+  };
+  const signals = [
+    m.desc?.trioCovered?"Description ancrée":"Description incomplète",
+    (m.desc?.nonVisualCoreCovered||0)>=2?"Sensoriel non-visuel présent":"Sensoriel non-visuel faible",
+    (m.desc?.verbNounRatio||0)>=0.55?"Description dynamique":"Inventaire dominant"
+  ].slice(0,3);
+  const evidence = trace.flatMap(t=>t.evidence||[]).filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+  return {score,max,breakdown,signals,evidence,trace};
+}
+
+function scoreTempsLieuV2Fixed(m, max=5){
+  const base = roundToHalf(max * 0.60);
+  const trace = [];
+  let delta = 0;
+  if(m.timeHits>=1 && m.placeHits>=1){ delta += 2.4; trace.push(traceItem("rubric50","time_place_anchor", +2.4, "Ancrages temps et lieu détectés.", firstEvidence(m.text))); }
+  else { delta -= 1.2; trace.push(traceItem("rubric50","time_place_missing", -1.2, "Temps ou lieu manquant : narration dans le vide.", firstEvidence(m.text))); }
+  if(m.movement?.readableMoves){ delta += 1.2; trace.push(traceItem("rubric50","time_place_moves", +1.2, "Déplacements lisibles (prépositions + verbes de mouvement).", m.movement?.evidence || [])); }
+  else { delta -= 0.6; }
+
+  const score = roundToHalf(clamp(base + delta, 0, max));
+  const breakdown = {
+    ancrage:{score:(m.timeHits>=1 && m.placeHits>=1)?2.8:1.0, max:3, signals:[(m.timeHits>=1 && m.placeHits>=1)?"Temps+lieu explicites":"Ancrage incomplet"], evidence:firstEvidence(m.text)},
+    deplacements:{score:m.movement?.readableMoves?1.6:0.5, max:2, signals:[m.movement?.readableMoves?"Déplacements lisibles":"Déplacements implicites"], evidence:(m.movement?.evidence||[]).slice(0,1)}
+  };
+  const signals = [
+    (m.timeHits>=1 && m.placeHits>=1)?"Ancrages temps/lieu présents":"Ancrages temps/lieu faibles",
+    m.movement?.readableMoves?"Déplacements lisibles":"Déplacements peu lisibles"
+  ].slice(0,3);
+  const evidence = trace.flatMap(t=>t.evidence||[]).filter(e=>e && typeof e.excerpt === "string").slice(0,3);
+  return {score,max,breakdown,signals,evidence,trace};
+}
+
 function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const {gates} = computeGates(m, level);
   const trace = fin?.trace || [...(p1?.trace||[]), ...(p2?.trace||[]), ...(p3?.trace||[])];
@@ -2403,10 +2481,6 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
 
   const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[],signals:[],evidence:[]}]));
 
-  // Bases modulaires (60% du max) pour permettre bonus ET malus visibles
-  modules.dialogues.score = roundToHalf(modules.dialogues.max * 0.60);
-  modules.description.score = roundToHalf(modules.description.max * 0.60);
-  modules.temps_lieu.score = roundToHalf(modules.temps_lieu.max * 0.60);
 
   const tuning = cfg.levelTuning?.[level] || {};
 
@@ -2421,83 +2495,40 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
       if(t.ruleId === "pseg") add("langue", t, (t.delta/3)*5);
       if(t.ruleId === "syn") add("langue", t, (t.delta/2)*4);
       if(t.ruleId === "ortho") add("langue", t, (t.delta/2.5)*4);
-      if(t.ruleId === "lex") add("lexique", t, (t.delta/2.5)*4);
       if(t.ruleId.startsWith("confusion_")) add("langue", t, t.delta*0.25);
     }
     if(t.module === "pass2"){
       if(t.ruleId === "theme") add("narration", t, (t.delta/1.5)*2.5);
-      if(t.ruleId === "coh") add("coherence", t, (t.delta/2.5)*2);
       if(t.ruleId === "pov") add("narration", t, (t.delta/1.5)*1.5);
       if(t.ruleId === "ld") add("style", t, (t.delta/1.0)*1.5);
-      if(t.ruleId === "sens") add("description", t, (t.delta/2.0)*3.5);
       if(t.ruleId === "interest") add("narration", t, (t.delta/1.5)*2);
-      if(t.ruleId === "gate_time_place") add("temps_lieu", t, -1.2);
-      if(t.ruleId === "gate_senses") add("description", t, -1.2);
     }
     if(t.module === "pass3"){
       if(t.ruleId === "ending") add("style", t, (t.delta/1.0)*1.5);
-      if(t.ruleId === "motifs") add("cohesion", t, (t.delta/1.0)*1.5);
-      if(t.ruleId === "scene") add("dialogues", t, (t.delta/1.0)*2.5);
       if(t.ruleId === "disabled") add("style", t, -0.5);
     }
   }
 
-  const dialogueInfo = parseDialogueInfo(m.text, m);
-  const dialogueTrace = [];
-  let dialogueGain = 0;
-  if(dialogueInfo.count >= 2){ dialogueGain += 1.5; dialogueTrace.push(traceItem("rubric50","dialogue_count", +1.5, `Dialogues présents (${dialogueInfo.count} répliques).`, (dialogueInfo.evidence?.replByDash||[]).concat(dialogueInfo.evidence?.replByFr||[]).concat(dialogueInfo.evidence?.replByStd||[]).slice(0,2))); }
-  else if((m.dialogue?.nbIncises || 0) >= 1){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_missing_markers", -0.8, "Dialogue probable sans marquage clair (tirets/guillemets).", firstEvidence(m.text))); }
-  if(dialogueInfo.punctRatio >= 0.66){ dialogueGain += 1.0; dialogueTrace.push(traceItem("rubric50","dialogue_punct", +1.0, "Ponctuation dialoguée globalement saine.")); }
-  else if(dialogueInfo.count >= 2){ dialogueGain -= 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_punct", -0.8, "Ponctuation/dialogues fragiles (tirets/majuscules/incises/guillemets).", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
-  if(dialogueInfo.friction){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_friction", +0.8, "Friction détectée tôt dans l'échange.", dialogueInfo.evidence?.friction||[])); }
-  if(dialogueInfo.bascule){ dialogueGain += 0.8; dialogueTrace.push(traceItem("rubric50","dialogue_bascule", +0.8, "Bascule dialoguée détectée.", dialogueInfo.evidence?.bascule||[])); }
-  if(dialogueInfo.sortie){ dialogueGain += 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_sortie", +0.9, "Sortie de dialogue avec décision/tension.", dialogueInfo.evidence?.sortie||[])); }
-  if(!dialogueInfo.quoteBalanced){ dialogueGain -= 0.9; dialogueTrace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.9, "Guillemets non équilibrés.", dialogueInfo.evidence?.quoteIssue||firstEvidence(m.text))); }
-  modules.dialogues.score = clamp(modules.dialogues.score + dialogueGain, 0, modules.dialogues.max);
-  modules.dialogues.traceIds.push(...dialogueTrace.map(x=>x.ruleId));
+  const dialogueMod = scoreDialoguesV2Fixed(m, modules.dialogues.max);
+  modules.dialogues.score = dialogueMod.score;
+  modules.dialogues.breakdown = dialogueMod.breakdown;
+  modules.dialogues.signals = dialogueMod.signals || [];
+  modules.dialogues.evidence = dialogueMod.evidence || [];
+  modules.dialogues.traceIds.push(...(dialogueMod.trace||[]).map(x=>x.ruleId));
 
-  const descTrace = [];
-  let descGain = 0;
-  if(m.desc?.trioCovered){
-    descGain += 2.2;
-    descTrace.push(traceItem("rubric50","desc_trio", +2.2, "Description ancrée : structure + objet + dérangement présents.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,3)));
-  } else {
-    descGain -= 1.0;
-    descTrace.push(traceItem("rubric50","desc_trio_missing", -1.0, "Description incomplète : trio structure/objet/dérangement non couvert.", [...(m.desc?.evidence?.structure||[]), ...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.derangement||[])].slice(0,2)));
-  }
-  if((m.desc?.nonVisualCoreCovered || 0) >= 2){
-    descGain += 1.8;
-    descTrace.push(traceItem("rubric50","desc_non_visual", +1.8, "Sens non-visuels bien mobilisés (olfactif/tactile/sonore).", m.desc?.evidence?.nonVisual || []));
-  } else {
-    descGain -= 0.8;
-    descTrace.push(traceItem("rubric50","desc_non_visual_low", -0.8, "Sens non-visuels insuffisants pour ancrer la scène.", m.desc?.evidence?.nonVisual || firstEvidence(m.text)));
-  }
-  if((m.desc?.verbNounRatio || 0) < 0.55){
-    descGain -= 0.9;
-    descTrace.push(traceItem("rubric50","desc_inventory", -0.9, "Description trop en inventaire (noms >> verbes d'action).", [...(m.desc?.evidence?.objet||[]), ...(m.desc?.evidence?.structure||[])].slice(0,2)));
-  } else {
-    descGain += 0.6;
-  }
-  modules.description.score = clamp(modules.description.score + descGain, 0, modules.description.max);
-  modules.description.traceIds.push(...descTrace.map(x=>x.ruleId));
+  const descMod = scoreDescriptionV2Fixed(m, modules.description.max);
+  modules.description.score = descMod.score;
+  modules.description.breakdown = descMod.breakdown;
+  modules.description.signals = descMod.signals || [];
+  modules.description.evidence = descMod.evidence || [];
+  modules.description.traceIds.push(...(descMod.trace||[]).map(x=>x.ruleId));
 
-  const tlTrace = [];
-  let tlGain = 0;
-  if(m.timeHits>=1 && m.placeHits>=1){
-    tlGain += 2.4;
-    tlTrace.push(traceItem("rubric50","time_place_anchor", +2.4, "Ancrages temps et lieu détectés.", firstEvidence(m.text)));
-  } else {
-    tlGain -= 1.2;
-    tlTrace.push(traceItem("rubric50","time_place_missing", -1.2, "Temps ou lieu manquant : narration dans le vide.", firstEvidence(m.text)));
-  }
-  if(m.movement?.readableMoves){
-    tlGain += 1.2;
-    tlTrace.push(traceItem("rubric50","time_place_moves", +1.2, "Déplacements lisibles (prépositions + verbes de mouvement).", m.movement?.evidence || []));
-  } else {
-    tlGain -= 0.6;
-  }
-  modules.temps_lieu.score = clamp(modules.temps_lieu.score + tlGain, 0, modules.temps_lieu.max);
-  modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
+  const tlMod = scoreTempsLieuV2Fixed(m, modules.temps_lieu.max);
+  modules.temps_lieu.score = tlMod.score;
+  modules.temps_lieu.breakdown = tlMod.breakdown;
+  modules.temps_lieu.signals = tlMod.signals || [];
+  modules.temps_lieu.evidence = tlMod.evidence || [];
+  modules.temps_lieu.traceIds.push(...(tlMod.trace||[]).map(x=>x.ruleId));
 
   // métriques d'appoint pour modules peu couverts
   const cohesionV3 = scoreCohesionV3(level, m);
@@ -2579,7 +2610,7 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   };
   const score60Final = roundToHalf(clamp(score60,0,(cfg.totals?.total || 60)));
   const rubric50_legacy = roundToHalf(score60Final * (50/60));
-  return {score60: score60Final, modules, details, capsApplied, version: cfg.version || "rubric-v2", trace: [...dialogueTrace, ...descTrace, ...tlTrace], rubric50_legacy};
+  return {score60: score60Final, modules, details, capsApplied, version: cfg.version || "rubric-v2", trace: [...trace, ...(dialogueMod.trace||[]), ...(descMod.trace||[]), ...(tlMod.trace||[])], rubric50_legacy};
 }
 
 
