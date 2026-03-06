@@ -37,3 +37,18 @@ Les 12 textes de test sont dans `tests/fixtures/`:
 
 ## Résultat attendu
 - Flux complet fonctionnel de bout en bout: saisie → scoring → affichage → export → historique.
+
+
+## PR4 — planchers attendus (mode Éduscol)
+Pour les nouvelles fixtures `*_bon_eduscol_*`, vérifier en mode **Référentiel Éduscol (standard)**:
+- `5e_bon_eduscol_01.txt` >= **14/20**
+- `5e_bon_eduscol_02.txt` >= **14/20**
+- `4e_bon_eduscol_01.txt` >= **15/20**
+- `4e_bon_eduscol_02.txt` >= **15/20**
+- `3e_bon_eduscol_01.txt` >= **15.5/20**
+- `3e_bon_eduscol_02.txt` >= **15.5/20**
+
+Objectif de progression visible:
+- 5e bon: 14–16 ; excellent: 17–18
+- 4e bon: 15–17 ; excellent: 18–19
+- 3e bon: 15–17 ; excellent: 18–20
