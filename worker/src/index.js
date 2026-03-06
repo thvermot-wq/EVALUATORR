@@ -11,7 +11,7 @@ const EvaluatorrSchemaV1 = {
       additionalProperties: false,
       required: ["score50_delta_suggestion", "confidence"],
       properties: {
-        score50_delta_suggestion: { type: "number", minimum: -3, maximum: 3 },
+        score50_delta_suggestion: { type: "number", minimum: -2, maximum: 2 },
         confidence: { type: "number", minimum: 0, maximum: 1 },
       },
     },
@@ -163,7 +163,7 @@ function sanitizeOutput(out) {
 
   safe.schema_version = "1";
   safe.overall = safe.overall || f.overall;
-  safe.overall.score50_delta_suggestion = clamp(Number(pick(safe.overall.score50_delta_suggestion, 0)), -3, 3);
+  safe.overall.score50_delta_suggestion = clamp(Number(pick(safe.overall.score50_delta_suggestion, 0)), -2, 2);
   safe.overall.confidence = clamp(Number(pick(safe.overall.confidence, 0.2)), 0, 1);
 
   safe.modules = safe.modules || f.modules;
@@ -200,6 +200,7 @@ function validateInput(body) {
   if (!body.level || !["5e", "4e", "3e"].includes(body.level)) return "level invalide";
   if (!body.text || typeof body.text !== "string") return "text requis";
   if (!body.local || typeof body.local !== "object") return "local requis";
+  if (body.schema && body.schema !== "evaluatorr-v1") return "schema invalide";
   return null;
 }
 
@@ -253,7 +254,7 @@ export default {
       level: body.level,
       text: body.text.slice(0, 6000),
       local: body.local,
-      wanted: body.wanted || { jsonSchemaVersion: "1" },
+      schema: body.schema || "evaluatorr-v1",
       constraints: {
         no_final_grade_decision: true,
         keep_client_deterministic_scoring: true,
