@@ -1017,12 +1017,13 @@ function computeMetrics(raw){
   const suspects = {};
   function isSuspect(w){
     if(w.length < 4) return false;
-    if(w.includes("'")) return false;
+    if(w.includes("'") || w.includes("-") || w.includes("’")) return false;
     if(FR_FREQ_WORDS.has(w)) return false;
     if(/([a-zà-öø-ÿ])\1\1/.test(w)) return true;
-    if(/[bcdfghjklmnpqrstvwxz]{5,}/.test(w)) return true;
+    if(/[bcdfghjklmnpqrstvwxz]{6,}/.test(w)) return true;
     if(/(ee|aa|ii|oo|uu)$/.test(w)) return true;
-    if(w.length >= 10 && !FR_FREQ_WORDS.has(w)) return true;
+    if(/\d/.test(w)) return true;
+    if(/(?=.*[a-zà-öø-ÿ])(?=.*\d)/i.test(w)) return true;
     return false;
   }
   for(const w of tokens){
@@ -1401,9 +1402,9 @@ function scorePass1(m, level){
 
   // suspects
   if(m.suspectTotal === 0) { ortho += 1.4; audit.push("ORTHO (+) : peu d’alertes “mots suspects” (proxy)."); }
-  else if(m.suspectTotal <= 2) { ortho += 1.1; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
-  else if(m.suspectTotal <= 5) { ortho += 0.8; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
-  else { ortho += 0.4; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 3) { ortho += 1.2; audit.push(`ORTHO (~) : quelques alertes (${m.suspectTotal}).`); }
+  else if(m.suspectTotal <= 7) { ortho += 0.9; audit.push(`ORTHO (-) : alertes multiples (${m.suspectTotal}).`); }
+  else { ortho += 0.6; audit.push(`ORTHO (-) : nombreuses alertes (${m.suspectTotal}).`); }
 
   if(m.suspectTotal > 0){
     alerts.push({lvl:"warn", t:`Mots suspects (proxy) : ${m.suspectTop.map(([w,n])=>`${w}(${n})`).join(", ")}`});
