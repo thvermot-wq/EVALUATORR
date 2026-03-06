@@ -778,6 +778,9 @@ const STOP_FR = new Set(["le","la","les","un","une","des","du","de","d","et","ou
 const CONNECTEURS = ["mais","pourtant","cependant","donc","alors","ainsi","parce que","puis","ensuite","tandis que","pendant que","quand","comme","si","car","du coup","en revanche","par conséquent"];
 const WEAK_VERBS_FORMS = ["être","suis","es","est","sommes","êtes","sont","été","avais","avait","avaient","avoir","ai","as","a","ont","eu","faire","fais","fait","font","faisait","faisaient","aller","vais","va","vont","allait","allaient","dire","dis","dit","disent","disait","disaient"];
 const INTENSIFIERS = ["très","vraiment","super","trop"];
+const COH_PRONOUNS = ["il","elle","ils","elles","on","ça","cela","ce","c'","lui","leur","eux","en","y"];
+const COH_DETERMINERS = ["un","une","le","la","les","des","ce","cette","ces","mon","ma","mes","ton","ta","tes","son","sa","ses","notre","nos","votre","vos","leur","leurs"];
+const IGNORE_PRON_RUN = new Set(["je","j","tu","nous","vous"]);
 
 // Proxy “dico fréquent” (orthographe)
 const FR_FREQ_WORDS = new Set((
@@ -1120,6 +1123,85 @@ function computeMetrics(raw){
     contentRepeatScore
   };
 
+  // Cohésion v2
+  const pronounSet = new Set(COH_PRONOUNS);
+  const detSet = new Set(COH_DETERMINERS);
+  let pronounRunMax = 0, curRun = 0;
+  const nounishIndices = [];
+  for(let i=0;i<tokens.length;i++){
+    const tk = tokens[i];
+    if(i>0 && detSet.has(tokens[i-1])) nounishIndices.push(i);
+    if(pronounSet.has(tk) && !IGNORE_PRON_RUN.has(tk)){
+      curRun += 1;
+      if(curRun > pronounRunMax) pronounRunMax = curRun;
+    } else curRun = 0;
+  }
+
+  const properNounIndices = [];
+  const capRe = /\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]{2,}\b/g;
+  for(const mCap of text.matchAll(capRe)){
+    const left = text.slice(0, mCap.index || 0);
+    const idxTok = tokenize(left).length;
+    properNounIndices.push(idxTok);
+  }
+
+  let gapCount = 0;
+  const gapEvidence = [];
+  const targetPros = new Set(["il","elle","ils","elles"]);
+  for(let i=0;i<tokens.length;i++){
+    const tk = tokens[i];
+    if(!targetPros.has(tk)) continue;
+    const a = Math.max(0, i-20);
+    let hasRef = false;
+    for(const ni of nounishIndices){ if(ni >= a && ni < i){ hasRef = true; break; } }
+    if(!hasRef){
+      for(const pi of properNounIndices){ if(pi >= a && pi < i){ hasRef = true; break; } }
+    }
+    if(!hasRef){
+      gapCount += 1;
+      if(gapEvidence.length < 2){
+        const t0 = tokens.slice(0, i).join(" ");
+        const charPos = t0.length + (i>0?1:0);
+        gapEvidence.push(mkEvidence(text, charPos, charPos + tk.length, 60));
+      }
+    }
+  }
+
+  const paraWordSets = paras.map(par => {
+    const tk = tokenize(par).filter(w => !STOP_FR.has(w) && w.length >= 4);
+    const f = {};
+    for(const w of tk) f[w] = (f[w]||0)+1;
+    return new Set(topN(f,6).map(([w])=>w));
+  });
+  let continuityZeroTransitions = 0;
+  let continuityBroken = false;
+  let continuityEvidence = null;
+  for(let i=1;i<paraWordSets.length;i++){
+    const prev = paraWordSets[i-1], cur = paraWordSets[i];
+    let overlap = 0;
+    for(const w of cur){ if(prev.has(w)) overlap += 1; }
+    if(overlap === 0){
+      continuityZeroTransitions += 1;
+      if(!continuityEvidence){
+        const prevTxt = (paras[i-1] || "").slice(-85);
+        const curTxt = (paras[i] || "").slice(0,85);
+        continuityEvidence = `${prevTxt} ⟂ ${curTxt}`;
+      }
+    }
+  }
+  continuityBroken = continuityZeroTransitions >= 2;
+
+  const coh = {
+    pronounRunMax,
+    gapCount,
+    gapEvidence,
+    paragraphContinuity: {
+      zeroTransitions: continuityZeroTransitions,
+      broken: continuityBroken,
+      evidence: continuityEvidence
+    }
+  };
+
   // Orthographe proxy “suspects”
   const suspects = {};
   function isSuspect(w){
@@ -1336,7 +1418,7 @@ function computeMetrics(raw){
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
     sentLens, avgSent, sdSent,
     longThr, longVeryThr, longSentences, veryLongSentences,
-    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear, lex,
+    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear, lex, coh,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
     offsetMap: {kind:"normalized_identity", length:text.length},
     agreementLikelyDet, agreementLikelySubj, tenseMixWarn,
@@ -1965,6 +2047,39 @@ function scoreLexiqueV2(level, m){
   return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,4), evidence: evidence.slice(0,4)};
 }
 
+function scoreCohesionV2(level, m){
+  const max = 4;
+  let score = 2.8;
+  const signals = [];
+  const evidence = [];
+  const gapThreshold = (level === "5e") ? 4 : 3;
+
+  if((m.coh?.gapCount || 0) >= gapThreshold){
+    score -= 0.8;
+    signals.push(`Référents flous (${m.coh.gapCount})`);
+  }
+  if((m.coh?.pronounRunMax || 0) >= 4){
+    score -= 0.6;
+    signals.push(`Série de pronoms (${m.coh.pronounRunMax})`);
+  }
+  if(m.coh?.paragraphContinuity?.broken){
+    score -= 0.4;
+    signals.push("Rupture thématique inter-paragraphes");
+  }
+  const minConn = Number(RUBRIC_CFG.levelTuning?.[level]?.minConnectors ?? 1);
+  if((m.lex?.connectorsUnique || 0) >= minConn){
+    score += 0.4;
+    signals.push(`Chaînage présent (${m.lex.connectorsUnique} connecteurs)`);
+  }
+
+  for(const ev of (m.coh?.gapEvidence || []).slice(0,2)) evidence.push(ev);
+  if(m.coh?.paragraphContinuity?.broken && m.coh?.paragraphContinuity?.evidence){
+    evidence.push({start:0,end:0,excerpt:m.coh.paragraphContinuity.evidence});
+  }
+
+  return {score: roundToHalf(clamp(score, 0, max)), max, signals: signals.slice(0,3), evidence: evidence.slice(0,3)};
+}
+
 function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const {gates} = computeGates(m, level);
   const trace = fin?.trace || [...(p1?.trace||[]), ...(p2?.trace||[]), ...(p3?.trace||[])];
@@ -1972,8 +2087,6 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   const weights = cfg.weights60 || RUBRIC_CFG.weights60;
 
   const modules = Object.fromEntries(Object.entries(weights).map(([k,max])=>[k,{score:0,max,traceIds:[],signals:[],evidence:[]}]));
-
-  const tuning = cfg.levelTuning?.[level] || {};
 
   const tuning = cfg.levelTuning?.[level] || {};
 
@@ -2068,7 +2181,12 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
   modules.temps_lieu.traceIds.push(...tlTrace.map(x=>x.ruleId));
 
   // métriques d'appoint pour modules peu couverts
-  modules.cohesion.score += clamp((m.repeatsNear.length===0?1.2:0.4)+(m.top3Share<=0.34?1.2:0.5),0,modules.cohesion.max);
+  const cohesionV2 = scoreCohesionV2(level, m);
+  modules.cohesion.score = cohesionV2.score;
+  modules.cohesion.max = cohesionV2.max;
+  modules.cohesion.signals = cohesionV2.signals || [];
+  modules.cohesion.evidence = cohesionV2.evidence || [];
+  modules.cohesion.traceIds.push("cohesion_v2");
 
   const minConn = Number(tuning.minConnectors ?? 1);
   const minCausal = Number(tuning.minCausal ?? 0);
@@ -2110,7 +2228,8 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
       placeHits: m.placeHits,
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
-      lex: m.lex
+      lex: m.lex,
+      coh: m.coh
     },
     tuning
   };
@@ -2796,6 +2915,7 @@ function makePayload(state){
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
       lex: m.lex,
+      coh: m.coh,
       vagueCount: m.vagueCount,
       ticsCount: m.ticsCount,
       longSentences: m.longSentences.length,
