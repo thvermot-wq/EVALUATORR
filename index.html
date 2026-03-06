@@ -1975,6 +1975,8 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
 
   const tuning = cfg.levelTuning?.[level] || {};
 
+  const tuning = cfg.levelTuning?.[level] || {};
+
   function add(module, traceItemObj, gain){
     if(!modules[module]) return;
     modules[module].score += gain;
