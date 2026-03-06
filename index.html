@@ -2220,6 +2220,7 @@ Objectif mesurable :
 const AI_CFG_KEY = "evaluator_v2_ai_cfg_v1";
 const AI_REVIEW_KEY = "evaluator_v2_ai_reviews_v1";
 const AI_MEMORY_KEY = "evaluator_v2_ai_memory_v1";
+const AI_DEFAULT_ENDPOINT = "/correct";
 const EXAMPLE_LIB_KEY = "evaluator_v2_example_library_v1";
 
 function textHash32(str){
@@ -2368,15 +2369,15 @@ function renderNearExamples(state){
 function loadAICfg(){
   try{
     const raw = localStorage.getItem(AI_CFG_KEY);
-    const base = {mode:"OFF", endpoint:"", saveInHistory:false};
+    const base = {mode:"OFF", endpoint:AI_DEFAULT_ENDPOINT, saveInHistory:false};
     if(!raw) return base;
     const p = JSON.parse(raw);
     return {
       mode: ["OFF","AUTO","ONLINE"].includes(p?.mode) ? p.mode : "OFF",
-      endpoint: String(p?.endpoint || ""),
+      endpoint: String(p?.endpoint || AI_DEFAULT_ENDPOINT),
       saveInHistory: !!p?.saveInHistory
     };
-  } catch { return {mode:"OFF", endpoint:"", saveInHistory:false}; }
+  } catch { return {mode:"OFF", endpoint:AI_DEFAULT_ENDPOINT, saveInHistory:false}; }
 }
 function saveAICfg(cfg){
   localStorage.setItem(AI_CFG_KEY, JSON.stringify({
@@ -2384,6 +2385,11 @@ function saveAICfg(cfg){
     endpoint: cfg.endpoint,
     saveInHistory: !!cfg.saveInHistory
   }));
+}
+function resolveAIEndpoint(rawEndpoint){
+  const e = String(rawEndpoint || "").trim();
+  if(e) return e;
+  return AI_DEFAULT_ENDPOINT;
 }
 function shouldUseAI(mode){
   if(mode === "ONLINE") return true;
@@ -2937,7 +2943,7 @@ const aiModeEl = document.getElementById("aiMode");
 const aiEndpointEl = document.getElementById("aiEndpoint");
 const saveAIHistoryEl = document.getElementById("saveAIHistory");
 if(aiModeEl) aiModeEl.value = aiCfg.mode;
-if(aiEndpointEl) aiEndpointEl.value = aiCfg.endpoint;
+if(aiEndpointEl) aiEndpointEl.value = resolveAIEndpoint(aiCfg.endpoint);
 if(saveAIHistoryEl) saveAIHistoryEl.checked = !!aiCfg.saveInHistory;
 function persistAICfgFromUI(){
   saveAICfg({
@@ -2984,9 +2990,8 @@ bindEvt("btnEval","click", ()=>{
 
 document.getElementById("btnTestAI")?.addEventListener("click", async ()=>{
   persistAICfgFromUI();
-  const endpoint = (aiEndpointEl?.value || "").trim();
-  if(!endpoint){ setStatus("Saisis un endpoint IA."); return; }
-  setStatus("Test endpoint IA…");
+  const endpoint = resolveAIEndpoint(aiEndpointEl?.value || "");
+    setStatus("Test endpoint IA…");
   const ping = await fetchAIReport(endpoint, {level:"4e", text:"Ping technique", local:{score50:0, modules:{}, gates:{}, traceLight:[]}, schema:"evaluatorr-v1"}, 12000);
   setStatus(ping.ok ? "Endpoint IA OK." : "Endpoint IA indisponible.");
 });
@@ -3001,7 +3006,7 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
     persistAICfgFromUI();
 
     const aiMode = aiModeEl?.value || "OFF";
-    const endpoint = (aiEndpointEl?.value || "").trim();
+    const endpoint = resolveAIEndpoint(aiEndpointEl?.value || "");
     const minWords = getLevelCfg(level)?.minWords || 150;
     if(base.m.words < minWords){
       setStatus(`IA non envoyée : texte trop court (<${minWords} mots). Offline OK.`);
@@ -3009,7 +3014,6 @@ document.getElementById("btnEvalAI")?.addEventListener("click", async ()=>{
       return;
     }
     if(!shouldUseAI(aiMode)){ setStatus("Mode IA OFF/AUTO hors-ligne : offline OK."); renderAIBox({diagnostic:"Mode IA inactif.", conseils:[], reecritures:[]}); return; }
-    if(!endpoint){ setStatus("Endpoint IA manquant, offline OK."); renderAIBox({diagnostic:"Endpoint IA non configuré.", conseils:[], reecritures:[]}); return; }
 
     setStatus("Éval locale OK, appel IA…");
     const payload = buildAIPayload(level, raw, base.m, base.fin);
