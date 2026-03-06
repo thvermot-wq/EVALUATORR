@@ -1702,7 +1702,10 @@ function scorePass3(m, level, p1, p2){
   const alerts = [];
 
   // Garde-fou : si forme trop faible, pas d’excellence (évite d’offrir des points aux copies illisibles)
-  const formOK = (p1?.score ?? 0) >= 6.5 && m.endPunct > 0 && m.words >= (getLevelCfg(level)?.minWords ?? 150);
+  const refMode = getRefMode();
+  const cfg = (refMode === "severe" ? LEVEL_SEVERE : LEVEL_EDUSCOL)[level] || getLevelCfg(level);
+  const p1Floor = (refMode === "eduscol" && level !== "3e") ? 6.0 : 6.5;
+  const formOK = (p1?.score ?? 0) >= p1Floor && m.endPunct > 0 && m.words >= (cfg?.minWords ?? 150);
 
   if(!formOK){
     audit.push("EXC (0/3) : forme insuffisante pour activer l’excellence.");
