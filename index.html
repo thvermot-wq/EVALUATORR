@@ -1155,6 +1155,29 @@ function computeMetrics(raw){
     contentRepeatScore
   };
 
+  function syllableCountApprox(word){
+    const groups = String(word||"").toLowerCase().match(/[aeiouyàâäéèêëîïôöùûüœ]+/g);
+    return Math.max(1, groups ? groups.length : 0);
+  }
+  const contentWords = lexTokens.filter(w => !STOP_FR.has(w) && w.length >= 3);
+  const contentLens = contentWords.map(w=>w.length);
+  const contentSyls = contentWords.map(w=>syllableCountApprox(w));
+  const contentUnique = new Set(contentWords);
+  const long8Count = contentWords.filter(w=>w.length >= 8).length;
+  const long11Count = contentWords.filter(w=>w.length >= 11).length;
+  const multiSylCount = contentSyls.filter(n=>n >= 3).length;
+  const lexExtra = {
+    contentWordsCount: contentWords.length,
+    avgLenContent: mean(contentLens),
+    sdLenContent: stdev(contentLens),
+    long8Share: contentWords.length ? (long8Count / contentWords.length) : 0,
+    long11Share: contentWords.length ? (long11Count / contentWords.length) : 0,
+    avgSylContent: mean(contentSyls),
+    sdSylContent: stdev(contentSyls),
+    multiSylShare: contentWords.length ? (multiSylCount / contentWords.length) : 0,
+    contentTypeTokenRatio: contentWords.length ? (contentUnique.size / contentWords.length) : 0
+  };
+
   // Cohésion v3
   const pronounSet = new Set(COH_PRONOUNS);
   const detSet = new Set(COH_DETERMINERS);
@@ -1515,7 +1538,7 @@ function computeMetrics(raw){
     punct, endPunct, endPunctAny, segUnits, segPerWords, capsAfterDot,
     sentLens, avgSent, sdSent,
     longThr, longVeryThr, longSentences, veryLongSentences,
-    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear, lex, coh,
+    filtered, mattr, freq, topWords, hapax, hapaxRatio, top1Share, top3Share, repeatsNear, lex, lexExtra, coh,
     suspectTop, suspectTotal, aposBad, confusionHits, confusionTotal,
     offsetMap: {kind:"normalized_identity", length:text.length},
     agreementLikelyDet, agreementLikelySubj, tenseMixWarn,
@@ -2121,6 +2144,11 @@ function scoreLexiqueV3(level, m){
   const weakVerbMax = level === "5e" ? 0.08 : 0.06;
   const repeatLimit = Number(tuning.maxTopWordShare ?? 0.20) + 0.08;
 
+  const lexExtra = m.lexExtra || {};
+  const ttrMin = level === "5e" ? 0.25 : (level === "3e" ? 0.30 : 0.28);
+  const long8Min = level === "5e" ? 0.04 : (level === "3e" ? 0.08 : 0.06);
+  const avgSylMin = level === "5e" ? 1.55 : (level === "3e" ? 1.75 : 1.65);
+
   const breakdown = {
     diversity: {score:0, max:2.0, signals:[], evidence:[]},
     connectors:{score:0, max:1.5, signals:[], evidence:[]},
@@ -2132,6 +2160,8 @@ function scoreLexiqueV3(level, m){
   if((m.mattr || 0) >= minMattrOk){
     breakdown.diversity.score += 1.0;
     breakdown.diversity.signals.push(`MATTR suffisant (${(m.mattr||0).toFixed(2)})`);
+  } else {
+    breakdown.diversity.signals.push(`Diversité faible (MATTR ${(m.mattr||0).toFixed(2)})`);
   }
   if((m.lex?.hapaxRatio || 0) >= hapaxTarget){
     breakdown.diversity.score += 0.6;
@@ -2141,6 +2171,22 @@ function scoreLexiqueV3(level, m){
     breakdown.diversity.score += 0.4;
     breakdown.diversity.signals.push(`Mots longs utiles (${((m.lex?.longWordRatio||0)*100).toFixed(1)}%)`);
   }
+
+  let povertyPenalty = 0;
+  if((lexExtra.contentTypeTokenRatio || 0) < ttrMin){
+    povertyPenalty += 0.4;
+    breakdown.diversity.signals.push(`Diversité faible (TTR ${(lexExtra.contentTypeTokenRatio||0).toFixed(2)})`);
+  }
+  if((lexExtra.long8Share || 0) < long8Min){
+    povertyPenalty += 0.4;
+    breakdown.diversity.signals.push(`Peu de mots longs (${((lexExtra.long8Share||0)*100).toFixed(1)}%)`);
+  }
+  if((lexExtra.avgSylContent || 0) < avgSylMin){
+    povertyPenalty += 0.4;
+    breakdown.diversity.signals.push(`Syllabes faibles (${(lexExtra.avgSylContent||0).toFixed(2)})`);
+  }
+  povertyPenalty = Math.min(1.2, povertyPenalty);
+  if(povertyPenalty > 0) breakdown.diversity.score -= povertyPenalty;
   breakdown.diversity.score = clamp(breakdown.diversity.score, 0, breakdown.diversity.max);
 
   // B) connectors /1.5
@@ -2158,7 +2204,7 @@ function scoreLexiqueV3(level, m){
   // C) verbPrecision /2.0
   if((m.lex?.weakVerbRate || 0) > weakVerbMax){
     breakdown.verbPrecision.score -= 0.8;
-    breakdown.verbPrecision.signals.push(`Verbes faibles trop présents (${((m.lex?.weakVerbRate||0)*100).toFixed(1)}%)`);
+    breakdown.verbPrecision.signals.push(`Verbes faibles élevés (${((m.lex?.weakVerbRate||0)*100).toFixed(1)}%)`);
     const weakCandidates = Object.entries((m.freq||{})).filter(([w,n])=>new Set(WEAK_VERBS_FORMS).has(w) && n>=1).slice(0,1);
     for(const [w] of weakCandidates){ breakdown.verbPrecision.evidence.push(...pickEvidence(m.text, w, 1)); }
   }
@@ -2193,7 +2239,7 @@ function scoreLexiqueV3(level, m){
 
   if((m.repeatsNear || []).length === 0){
     breakdown.repeatsParasites.score += 0.4;
-    breakdown.repeatsParasites.signals.push("Pas de redites proches")
+    breakdown.repeatsParasites.signals.push("Pas de redites proches");
   } else {
     breakdown.repeatsParasites.score -= 0.2;
     breakdown.repeatsParasites.signals.push(`Redites proches (${(m.repeatsNear||[]).length})`);
@@ -2222,7 +2268,6 @@ function scoreLexiqueV3(level, m){
 
   return {score: clamp(score, 0, 7), max:7, breakdown, signals, evidence};
 }
-
 
 function scoreCohesionV3(level, m){
   const max = 4;
@@ -2407,9 +2452,30 @@ function scoreCoherenceV3(level, m){
 
 
 function scoreDialoguesV2Fixed(m, max=6){
-  const base = 3.5;
-  const info = parseDialogueInfo(m.text, m);
+  const rawText = m?.text || "";
+  const info = parseDialogueInfo(rawText, m);
   const trace = [];
+  const replFr = m?.dialogue?.evidence?.replByFr || [];
+  const replStd = m?.dialogue?.evidence?.replByStd || [];
+  const dashStarts = (rawText.match(/^\s*[—-]\s+/gm) || []).length;
+  const dialoguePresent = (info.count >= 1) || replFr.length > 0 || replStd.length > 0 || dashStarts > 0;
+
+  if(!dialoguePresent){
+    return {
+      score: 0,
+      max,
+      breakdown: {
+        structure:{score:0, max:2, signals:["Aucun discours direct marqué"], evidence:[]},
+        ponctuation:{score:0, max:2, signals:["Aucun dialogue à évaluer"], evidence:[]},
+        dynamique:{score:0, max:2, signals:["Module non activé sans répliques"], evidence:[]}
+      },
+      signals:["Aucun discours direct marqué (tirets/guillemets)."],
+      evidence:[],
+      trace:[traceItem("rubric50","dialogue_absent", -1.5, "Aucun discours direct marqué (tirets/guillemets).")]
+    };
+  }
+
+  const base = 1.5;
   let delta = 0;
 
   if(info.count >= 2){
@@ -2420,7 +2486,7 @@ function scoreDialoguesV2Fixed(m, max=6){
     trace.push(traceItem("rubric50","dialogue_missing_markers", -0.8, "Dialogue probable sans marquage clair (tirets/guillemets).", firstEvidence(m.text)));
   } else {
     delta -= 0.4;
-    trace.push(traceItem("rubric50","dialogue_low_presence", -0.4, "Peu de matière dialoguée explicite.", firstEvidence(m.text)));
+    trace.push(traceItem("rubric50","dialogue_low_presence", -0.4, "Réplique isolée: dialogue encore peu développé.", firstEvidence(m.text)));
   }
 
   if(info.punctRatio >= 0.66){
@@ -2431,21 +2497,23 @@ function scoreDialoguesV2Fixed(m, max=6){
     trace.push(traceItem("rubric50","dialogue_punct", -0.8, "Ponctuation/dialogues fragiles (tirets/majuscules/incises/guillemets).", info.evidence?.quoteIssue||firstEvidence(m.text)));
   }
 
-  if(info.friction){ delta += 0.6; trace.push(traceItem("rubric50","dialogue_friction", +0.6, "Friction détectée tôt dans l'échange.", info.evidence?.friction||[])); }
-  if(info.bascule){ delta += 0.6; trace.push(traceItem("rubric50","dialogue_bascule", +0.6, "Bascule dialoguée détectée.", info.evidence?.bascule||[])); }
-  if(info.sortie){ delta += 0.7; trace.push(traceItem("rubric50","dialogue_sortie", +0.7, "Sortie de dialogue avec décision/tension.", info.evidence?.sortie||[])); }
+  if(info.count >= 3){
+    if(info.friction){ delta += 0.6; trace.push(traceItem("rubric50","dialogue_friction", +0.6, "Friction détectée tôt dans l'échange.", info.evidence?.friction||[])); }
+    if(info.bascule){ delta += 0.6; trace.push(traceItem("rubric50","dialogue_bascule", +0.6, "Bascule dialoguée détectée.", info.evidence?.bascule||[])); }
+    if(info.sortie){ delta += 0.7; trace.push(traceItem("rubric50","dialogue_sortie", +0.7, "Sortie de dialogue avec décision/tension.", info.evidence?.sortie||[])); }
+  }
   if(!info.quoteBalanced){ delta -= 0.8; trace.push(traceItem("rubric50","dialogue_quotes_unbalanced", -0.8, "Guillemets non équilibrés.", info.evidence?.quoteIssue||firstEvidence(m.text))); }
 
   const score = roundToHalf(clamp(base + delta, 0, max));
   const breakdown = {
-    structure:{score: clamp((info.count>=2?1.4:0.6) + ((m.dialogue?.nbIncises||0)>=1?0.2:0),0,2), max:2, signals:[info.count>=2?"Répliques présentes":"Structure dialoguée fragile"], evidence:[]},
-    ponctuation:{score: clamp((info.punctRatio>=0.66?1.4:0.6) + (!info.quoteBalanced?-0.4:0),0,2), max:2, signals:[info.punctRatio>=0.66?"Ponctuation tenue":"Ponctuation à renforcer"], evidence:[]},
-    dynamique:{score: clamp((info.friction?0.7:0.2) + (info.bascule?0.6:0) + (info.sortie?0.7:0.1),0,2), max:2, signals:[info.friction||info.bascule||info.sortie?"Dialogue dynamique":"Dialogue peu orienté action"], evidence:[]}
+    structure:{score: clamp((info.count>=2?1.4:0.7) + ((m.dialogue?.nbIncises||0)>=1?0.2:0),0,2), max:2, signals:[info.count>=2?"Répliques présentes":"Dialogue peu développé"], evidence:(info.evidence?.replByDash||[]).concat(info.evidence?.replByFr||[]).concat(info.evidence?.replByStd||[]).slice(0,1)},
+    ponctuation:{score: clamp((info.punctRatio>=0.66?1.4:0.6) + (!info.quoteBalanced?-0.4:0),0,2), max:2, signals:[info.punctRatio>=0.66?"Ponctuation tenue":"Ponctuation à renforcer"], evidence:(info.evidence?.quoteIssue||[]).slice(0,1)},
+    dynamique:{score: clamp((info.count>=3 ? (info.friction?0.7:0.2) + (info.bascule?0.6:0) + (info.sortie?0.7:0.1) : 0.4),0,2), max:2, signals:[info.count>=3 && (info.friction||info.bascule||info.sortie)?"Dialogue dynamique":"Progression dialoguée limitée"], evidence:[...(info.evidence?.friction||[]), ...(info.evidence?.bascule||[]), ...(info.evidence?.sortie||[])].slice(0,1)}
   };
   const signals = [
-    info.count>=2?`Dialogues présents (${info.count})`:"Dialogue discret",
+    info.count>=2?`Dialogues présents (${info.count})`:"Dialogue ponctuel",
     info.punctRatio>=0.66?"Ponctuation dialogue saine":"Ponctuation dialogue fragile",
-    info.friction||info.bascule||info.sortie?"Tension dialoguée visible":"Peu de bascule dialoguée"
+    info.count>=3 && (info.friction||info.bascule||info.sortie)?"Tension dialoguée visible":"Peu de bascule dialoguée"
   ].slice(0,3);
   const evidence = trace.flatMap(t=>t.evidence||[]).filter(e=>e && typeof e.excerpt === "string").slice(0,3);
   return {score,max,breakdown,signals,evidence,trace};
@@ -2632,6 +2700,7 @@ function scoreRubric(level, m, p1, p2, p3, fin, cfg=RUBRIC_CFG){
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
       lex: m.lex,
+      lexExtra: m.lexExtra,
       coh: m.coh,
       coherence: m.coherence
     },
@@ -3406,6 +3475,7 @@ function makePayload(state){
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
       lex: m.lex,
+      lexExtra: m.lexExtra,
       lexConnectorsCount: m.lex?.connectorsCount ?? 0,
       lexConnectorsUnique: m.lex?.connectorsUnique ?? 0,
       lexConnectorsDensity: Number((m.lex?.connectorsDensity ?? 0).toFixed(4)),
