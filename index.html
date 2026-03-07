@@ -447,7 +447,7 @@ Texte..."></textarea>
             <tbody><tr><td colspan="4">—</td></tr></tbody>
           </table>
 
-          <div class="small" style="margin-top:6px">Clique sur « Voir preuve » pour ouvrir les extraits du module.</div>
+          <div class="small" style="margin-top:6px">Clique sur « Voir preuve » (extraits) ou « Détails » (sous-items fixes).</div>
           <div class="out" id="rubricEvidenceBox" style="margin-top:6px">—</div>
           <div style="margin-top:6px; display:flex; gap:8px">
             <button class="btn secondary" id="btnCopyEvidence" type="button">Copier preuves</button>
@@ -1354,7 +1354,16 @@ function computeMetrics(raw){
     placeLeapEvidence = {start:0, end:0, excerpt: `${first} ⟶ ${second}`};
   }
   const tailSents = (sents || []).slice(-2).join(" ");
-  const closureHit = /(finalement|à la fin|enfin|désormais|depuis ce jour|à partir de ce jour)/i.test(tailSents);
+  const closureRe = /(finalement|à la fin|enfin|désormais|depuis ce jour|à partir de ce jour)/i;
+  const closureMatch = tailSents.match(closureRe);
+  const closureHit = !!closureMatch;
+  let closureEvidence = [];
+  if(closureHit && closureMatch && closureMatch[0]){
+    const marker = closureMatch[0];
+    const tailIndex = text.length - tailSents.length;
+    const markerIndex = Math.max(0, tailIndex + tailSents.toLowerCase().indexOf(String(marker).toLowerCase()));
+    closureEvidence = [mkEvidence(text, markerIndex, markerIndex + marker.length, 55)];
+  }
   const coherence = {
     causalCount: causalPack.count,
     causalEvidence: causalPack.evidence,
@@ -1367,6 +1376,7 @@ function computeMetrics(raw){
     placeLeapHeuristic,
     placeLeapEvidence,
     closureHit,
+    closureEvidence,
     verbsCount
   };
 
@@ -2651,7 +2661,14 @@ function buildMicroDrills(m, gates){
 }
 
 function buildRewritePlan(rubric60){
-  const modules = Object.entries(rubric60?.modules || {}).map(([k,v])=>({key:k, score:Number(v?.score||0), max:Number(v?.max||0), signals:(v?.signals||[]), evidence:(v?.evidence||[])}));
+  const modules = Object.entries(rubric60?.modules || {}).map(([k,v])=>({
+    key:k,
+    score:Number(v?.score||0),
+    max:Number(v?.max||0),
+    signals:(v?.signals||[]),
+    evidence:(v?.evidence||[]),
+    breakdown:(v?.breakdown||null)
+  }));
   const ranked = modules
     .map(m=>({...m, deficit: Math.max(0, m.max - m.score)}))
     .sort((a,b)=> b.deficit - a.deficit);
@@ -2668,17 +2685,59 @@ function buildRewritePlan(rubric60){
     temps_lieu: "Ajoute 1 repère de temps et 1 repère de lieu, puis explicite un trajet.",
   };
   const nice = {langue:"Langue", narration:"Narration", description:"Description", dialogues:"Dialogues", style:"Style", temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence"};
+  const subitemNice = {
+    lexique:{diversity:"Diversité", connectors:"Connecteurs", verbPrecision:"Précision verbale", repeatsParasites:"Répétitions"},
+    cohesion:{referents:"Référents", reprises:"Reprises", pronounRuns:"Séries pronominales", continuity:"Continuité"},
+    coherence:{causal:"Causalité", chronology:"Chronologie", spatial:"Spatial", closure:"Clôture"}
+  };
+  const actionBySubitem = {
+    "lexique.diversity":"Ajoute 3 mots précis par paragraphe (noms/verbes), puis remplace 2 formulations vagues.",
+    "lexique.connectors":"Ajoute 2 connecteurs logiques variés (cause/opposition/conséquence).",
+    "lexique.verbPrecision":"Remplace 4 verbes faibles (être/faire/avoir/aller) par des verbes d’action ciblés.",
+    "lexique.repeatsParasites":"Supprime 3 répétitions proches et reformule 2 occurrences du mot le plus répété.",
+    "cohesion.referents":"Réintroduis le nom référent avant 3 pronoms il/elle/ils/elles flottants.",
+    "cohesion.reprises":"Ajoute 1 reprise nominale explicite à chaque transition de paragraphe.",
+    "cohesion.pronounRuns":"Casse les séries de pronoms: remplace au moins 2 pronoms par leur référent.",
+    "cohesion.continuity":"Ajoute une phrase-pont entre deux paragraphes pour maintenir le fil thématique.",
+    "coherence.causal":"Ajoute 1 lien causal explicite (parce que/car/donc) au moment clé.",
+    "coherence.chronology":"Ajoute 2 marqueurs de succession (ensuite, puis, après) et vérifie les fins de phrase.",
+    "coherence.spatial":"Ajoute un déplacement explicite entre deux lieux (verbe de mouvement + repère).",
+    "coherence.closure":"Ajoute une phrase de fermeture (finalement/à la fin) pour stabiliser la chute."
+  };
+
+  function pickWorstSubitem(mod){
+    if(!["lexique","cohesion","coherence"].includes(mod.key) || !mod.breakdown || typeof mod.breakdown !== "object") return null;
+    let best = null;
+    for(const [subKey, subVal] of Object.entries(mod.breakdown)){
+      const max = Number(subVal?.max||0);
+      const score = Number(subVal?.score||0);
+      const deficit = Math.max(0, max - score);
+      if(!best || deficit > best.deficit){
+        best = {subKey, deficit, max, score};
+      }
+    }
+    if(!best || best.deficit <= 0) return null;
+    return best;
+  }
 
   const plan = [];
   for(const mod of ranked){
     if(mod.deficit <= 0) continue;
     const signal = mod.signals[0] || "Module à renforcer";
     const ev = mod.evidence[0]?.excerpt || "Preuve à confirmer dans le texte.";
+    const sub = pickWorstSubitem(mod);
+    const subLabel = sub ? (subitemNice[mod.key]?.[sub.subKey] || sub.subKey) : "";
+    const subSignal = sub ? ((mod.breakdown?.[sub.subKey]?.signals||[])[0] || signal) : signal;
+    const action = sub ? (actionBySubitem[`${mod.key}.${sub.subKey}`] || actionByModule[mod.key]) : (actionByModule[mod.key] || "Renforce ce module avec 2 révisions ciblées et une relecture finale.");
+
     plan.push({
       module: mod.key,
-      title: `${nice[mod.key]||mod.key} — priorité`,
-      why: `${signal} (manque ${mod.deficit.toFixed(1)}/${mod.max}).`,
-      action: actionByModule[mod.key] || "Renforce ce module avec 2 révisions ciblées et une relecture finale.",
+      subitem: sub?.subKey || null,
+      title: sub ? `${nice[mod.key]||mod.key} — ${subLabel}` : `${nice[mod.key]||mod.key} — priorité`,
+      why: sub
+        ? `${subSignal} (manque ${sub.deficit.toFixed(1)}/${sub.max} sur ${subLabel.toLowerCase()}).`
+        : `${signal} (manque ${mod.deficit.toFixed(1)}/${mod.max}).`,
+      action,
       evidenceExcerpt: ev
     });
     if(plan.length>=3) break;
@@ -3328,8 +3387,12 @@ function makePayload(state){
       sensesCovered: m.sensesCovered,
       nonVisualCovered: m.nonVisualCovered,
       lex: m.lex,
+      lexConnectorsCount: m.lex?.connectorsCount ?? 0,
+      lexConnectorsUnique: m.lex?.connectorsUnique ?? 0,
+      lexConnectorsDensity: Number((m.lex?.connectorsDensity ?? 0).toFixed(4)),
       coh: m.coh,
       coherence: m.coherence,
+      closureHit: !!m.coherence?.closureHit,
       vagueCount: m.vagueCount,
       ticsCount: m.ticsCount,
       longSentences: m.longSentences.length,
@@ -3530,21 +3593,51 @@ document.getElementById("passScores").textContent =
       temps_lieu:"Temps/Lieu", lexique:"Lexique", cohesion:"Cohésion", coherence:"Cohérence", langue:"Langue"
     };
     const list = fin.rubric?.modules || {};
+    const detailEligible = new Set(["lexique","cohesion","coherence"]);
     tbody.innerHTML = Object.entries(list).map(([k,v])=>{
       const sig = (v.signals||[]).slice(0,2);
       const keyLine = sig.length ? sig.join(" • ") : diagnoseRubricModule(k, v, fin.trace || []);
       const hasEvidence = (v.evidence||[]).length > 0;
-      const btn = hasEvidence ? `<button class="btn secondary btn-proof" type="button" data-module="${escapeHtml(k)}">Voir preuve</button>` : "—";
-      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${btn}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
+      const hasDetails = detailEligible.has(k) && v.breakdown && typeof v.breakdown === "object";
+      const btnProof = hasEvidence ? `<button class="btn secondary btn-proof" type="button" data-module="${escapeHtml(k)}">Voir preuve</button>` : "";
+      const btnDetails = hasDetails ? `<button class="btn secondary btn-detail" type="button" data-module="${escapeHtml(k)}">Détails</button>` : "";
+      const btnCell = [btnProof, btnDetails].filter(Boolean).join(" ") || "—";
+      return `<tr><td>${escapeHtml(labels[k]||k)}</td><td>${escapeHtml(keyLine)}</td><td>${btnCell}</td><td>${v.score.toFixed(1)}/${v.max}</td></tr>`;
     }).join("") || `<tr><td colspan="4">—</td></tr>`;
 
     const evBox = document.getElementById("rubricEvidenceBox");
     const evidenceMap = buildRubricEvidenceMap(fin.rubric || {});
+    const detailLabels = {
+      lexique:{diversity:"Diversité", connectors:"Connecteurs", verbPrecision:"Précision verbale", repeatsParasites:"Répétitions"},
+      cohesion:{referents:"Référents", reprises:"Reprises", pronounRuns:"Séries pronominales", continuity:"Continuité"},
+      coherence:{causal:"Causalité", chronology:"Chronologie", spatial:"Spatial", closure:"Clôture"}
+    };
+
     const renderEvidence = (moduleKey)=>{
       if(!evBox) return;
       const label = labels[moduleKey] || moduleKey;
       const evs = (evidenceMap[moduleKey] || []).slice(0,3);
       evBox.textContent = evs.length ? `${label}\n` + evs.map((e,i)=>`${i+1}. ${e.excerpt || "—"}`).join("\n") : "Aucune preuve disponible pour ce module.";
+    };
+
+    const renderDetails = (moduleKey)=>{
+      if(!evBox) return;
+      const moduleState = list[moduleKey] || {};
+      const breakdown = moduleState.breakdown;
+      if(!breakdown || typeof breakdown !== "object"){
+        evBox.textContent = "Aucun sous-item disponible pour ce module.";
+        return;
+      }
+      const label = labels[moduleKey] || moduleKey;
+      const lines = [`${label} — ${Number(moduleState.score||0).toFixed(1)}/${Number(moduleState.max||0)}`, ""];
+      for(const [subKey, subVal] of Object.entries(breakdown)){
+        const subLabel = detailLabels[moduleKey]?.[subKey] || subKey;
+        const sig = (subVal?.signals || [])[0] || "Signal à préciser";
+        lines.push(`- ${subLabel}: ${Number(subVal?.score||0).toFixed(1)}/${Number(subVal?.max||0)} — ${sig}`);
+        const ev = (subVal?.evidence || []).find(e=>e && typeof e.excerpt === "string");
+        if(ev) lines.push(`  preuve: ${ev.excerpt}`);
+      }
+      evBox.textContent = lines.join("\n");
     };
 
     const firstWithEvidence = Object.keys(evidenceMap)[0] || "";
@@ -3555,6 +3648,13 @@ document.getElementById("passScores").textContent =
       btn.addEventListener('click', ()=>{
         const moduleKey = btn.getAttribute('data-module') || "";
         renderEvidence(moduleKey);
+      });
+    });
+
+    tbody.querySelectorAll('.btn-detail').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const moduleKey = btn.getAttribute('data-module') || "";
+        renderDetails(moduleKey);
       });
     });
 
